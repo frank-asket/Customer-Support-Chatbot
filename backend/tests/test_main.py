@@ -286,6 +286,142 @@ def test_chat_hides_verify_tool_when_session_already_authenticated(monkeypatch) 
     assert payload["session"]["email"] == "donaldgarcia@example.net"
 
 
+def test_chat_rewrites_email_like_customer_id_to_uuid_for_order_tools(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    expected_customer_uuid = "83f08f88-b8f9-4424-a0d2-4f24195ff6ac"
+
+    async def fake_list_tools(self):
+        return [
+            {"name": "get_customer", "input_schema": {"type": "object"}},
+            {"name": "list_orders", "input_schema": {"type": "object"}},
+        ]
+
+    responses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "list_orders",
+                        "arguments": '{"customer_id":"donaldgarcia@example.net"}',
+                    },
+                }
+            ],
+        },
+        {"role": "assistant", "content": "I found your recent orders."},
+    ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return responses.pop(0)
+
+    async def fake_call_tool(self, name, arguments):
+        if name == "get_customer":
+            return {"customer_id": expected_customer_uuid}
+        if name == "list_orders":
+            assert arguments.get("customer_id") == expected_customer_uuid
+            return {"orders": [{"order_id": "A100", "order_status": "Processing"}]}
+        raise AssertionError(f"Unexpected tool call: {name}")
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fake_call_tool)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    auth_token = issue_token("donaldgarcia@example.net")
+    response = client.post(
+        "/chat",
+        json={
+            "message": "show my recent orders",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": auth_token,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["authenticated"] is True
+
+
+def test_chat_drops_email_from_customer_id_for_list_orders_schema_variant(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [
+            {
+                "name": "list_orders",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None},
+                        "status": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None},
+                    },
+                },
+            },
+            {
+                "name": "get_customer",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"customer_id": {"type": "string"}},
+                    "required": ["customer_id"],
+                },
+            },
+        ]
+
+    responses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "list_orders",
+                        "arguments": '{"customer_id":"donaldgarcia@example.net"}',
+                    },
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Here are your recent orders."},
+    ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return responses.pop(0)
+
+    async def fake_call_tool(self, name, arguments):
+        if name == "get_customer":
+            # Current MCP schema variant requires customer_id, so email lookup fails.
+            request = httpx.Request("POST", "https://mcp.example.com")
+            response = httpx.Response(status_code=400, request=request)
+            raise httpx.HTTPStatusError("bad customer_id", request=request, response=response)
+        if name == "list_orders":
+            # Backend should sanitize email-like customer_id and drop it.
+            assert "customer_id" not in arguments
+            return {"orders": [{"order_id": "A100", "order_status": "Processing"}]}
+        raise AssertionError(f"Unexpected tool call: {name}")
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fake_call_tool)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    auth_token = issue_token("donaldgarcia@example.net")
+    response = client.post(
+        "/chat",
+        json={
+            "message": "show my recent orders",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": auth_token,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["authenticated"] is True
+
+
 def test_chat_overrides_redundant_pin_prompt_for_authenticated_user(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")

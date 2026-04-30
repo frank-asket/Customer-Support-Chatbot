@@ -317,6 +317,104 @@ def filter_tools_for_session(tools: list[dict[str, Any]], authenticated: bool) -
     return [tool for tool in tools if str(tool.get("name", "")).lower() != "verify_customer_pin"]
 
 
+def is_uuid_like(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    if not candidate:
+        return False
+    try:
+        uuid.UUID(candidate)
+        return True
+    except ValueError:
+        return False
+
+
+def extract_customer_id(payload: dict[str, Any] | None) -> str | None:
+    if not payload:
+        return None
+    for key in ("customer_id", "customerId", "id", "uuid", "customer_uuid", "customerUuid"):
+        value = payload.get(key)
+        if is_uuid_like(value):
+            return str(value).strip()
+    return None
+
+
+async def resolve_authenticated_customer_id(
+    mcp: MCPService,
+    tools: list[dict[str, Any]],
+    authenticated_email: str | None,
+) -> str | None:
+    if not authenticated_email:
+        return None
+    customer_lookup_tool = (
+        first_tool_name(tools, "get", "customer")
+        or first_tool_name(tools, "customer", "details")
+        or first_tool_name(tools, "customer", "profile")
+        or first_tool_name(tools, "lookup", "customer")
+        or first_tool_name(tools, "customer")
+    )
+    if not customer_lookup_tool:
+        return None
+
+    lookup_args = [
+        {"email": authenticated_email},
+        {"customer_email": authenticated_email},
+        {"user_email": authenticated_email},
+    ]
+    for args in lookup_args:
+        try:
+            raw = await mcp.call_tool(customer_lookup_tool, args)
+        except httpx.HTTPError:
+            continue
+        payload = normalize_tool_response(raw)
+        customer_id = extract_customer_id(payload)
+        if customer_id:
+            return customer_id
+
+    # Some MCP schemas require customer_id for get_customer but allow list_orders
+    # without customer_id. Try deriving customer_id from order rows tied to email.
+    list_orders_tool = first_tool_name(tools, "list", "orders")
+    if not list_orders_tool:
+        return None
+    try:
+        order_raw = await mcp.call_tool(list_orders_tool, {})
+    except httpx.HTTPError:
+        return None
+    for item in normalize_tool_items(order_raw):
+        email_value = str(item.get("email") or item.get("customer_email") or "").strip().lower()
+        if email_value and email_value == authenticated_email.strip().lower():
+            customer_id = extract_customer_id(item)
+            if customer_id:
+                return customer_id
+    return None
+
+
+def inject_authenticated_identity_args(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    authenticated_email: str | None,
+    authenticated_customer_id: str | None,
+) -> dict[str, Any]:
+    if not is_order_tool(tool_name):
+        return tool_args
+    enriched = dict(tool_args)
+    if authenticated_email and not enriched.get("email"):
+        enriched["email"] = authenticated_email
+    customer_id_keys = ("customer_id", "customerId", "customer_uuid", "customerUuid")
+    for key in customer_id_keys:
+        current = enriched.get(key)
+        if isinstance(current, str) and "@" in current:
+            # MCP expects UUID-like customer identifiers, never email strings.
+            enriched.pop(key, None)
+    if authenticated_customer_id:
+        for key in customer_id_keys:
+            current = enriched.get(key)
+            if current is None or (isinstance(current, str) and not current.strip()):
+                enriched[key] = authenticated_customer_id
+    return enriched
+
+
 def required_tool_args(tool_schema: dict[str, Any] | None) -> list[str]:
     if not isinstance(tool_schema, dict):
         return []
@@ -790,6 +888,11 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         }
         if authenticated:
             allowed_tool_names.add("verify_customer_pin")
+        authenticated_customer_id = None
+        if authenticated:
+            authenticated_customer_id = await resolve_authenticated_customer_id(
+                mcp, available_tools, authenticated_email
+            )
 
         session_context = (
             f"Session state: authenticated={authenticated}, email={authenticated_email or 'unknown'}.\n"
@@ -882,6 +985,12 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                     )
                     continue
                 tool_args = parse_tool_args(raw_args)
+                tool_args = inject_authenticated_identity_args(
+                    tool_name,
+                    tool_args,
+                    authenticated_email=authenticated_email,
+                    authenticated_customer_id=authenticated_customer_id,
+                )
 
                 if tool_name in SENSITIVE_TOOL_NAMES and not authenticated:
                     messages.append(
@@ -909,9 +1018,13 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                     if verified:
                         authenticated = True
                         authenticated_email = email
+                        authenticated_customer_id = await resolve_authenticated_customer_id(
+                            mcp, available_tools, authenticated_email
+                        )
                     elif not authenticated:
                         authenticated = False
                         authenticated_email = None
+                        authenticated_customer_id = None
                     messages.append(
                         {
                             "role": "tool",

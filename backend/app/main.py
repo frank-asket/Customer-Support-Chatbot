@@ -45,6 +45,8 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "google/gemini-1.5-flash"
 SAFE_FALLBACK_MODEL = "google/gemini-1.5-flash"
 ESCALATION_KEYWORDS = ("urgent", "angry", "manager", "complaint", "refund", "chargeback")
+SENSITIVE_TOOL_NAMES = {"get_customer", "list_orders", "get_order", "create_order"}
+ORDER_MUTATION_CONFIRM_KEYWORDS = ("confirm", "place order", "submit order", "yes create")
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BACKEND_DIR / ".env")
@@ -306,6 +308,20 @@ def filter_tools_for_session(tools: list[dict[str, Any]], authenticated: bool) -
     if not authenticated:
         return tools
     return [tool for tool in tools if str(tool.get("name", "")).lower() != "verify_customer_pin"]
+
+
+def required_tool_args(tool_schema: dict[str, Any] | None) -> list[str]:
+    if not isinstance(tool_schema, dict):
+        return []
+    required = tool_schema.get("required")
+    if isinstance(required, list):
+        return [str(item) for item in required if isinstance(item, str)]
+    return []
+
+
+def needs_order_confirmation(user_message: str) -> bool:
+    lowered = user_message.lower()
+    return not any(keyword in lowered for keyword in ORDER_MUTATION_CONFIRM_KEYWORDS)
 
 
 def parse_tool_args(raw: str) -> dict[str, Any]:
@@ -713,6 +729,11 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         session_tools = filter_tools_for_session(available_tools, authenticated=authenticated)
         tool_definitions = to_tool_definitions(session_tools)
         allowed_tool_names = {str(tool.get("name", "")) for tool in session_tools}
+        tool_specs_by_name = {
+            str(tool.get("name", "")): tool
+            for tool in session_tools
+            if str(tool.get("name", ""))
+        }
         if authenticated:
             allowed_tool_names.add("verify_customer_pin")
 
@@ -802,6 +823,22 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                     continue
                 tool_args = parse_tool_args(raw_args)
 
+                if tool_name in SENSITIVE_TOOL_NAMES and not authenticated:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id"),
+                            "name": tool_name,
+                            "content": json.dumps(
+                                {
+                                    "error": "AUTH_REQUIRED",
+                                    "message": "Please verify your email and PIN before account or order actions.",
+                                }
+                            ),
+                        }
+                    )
+                    continue
+
                 if tool_name == "verify_customer_pin":
                     email = str(tool_args.get("email", ""))
                     pin = str(tool_args.get("pin", ""))
@@ -825,6 +862,41 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                                     "authenticated": authenticated,
                                     "email": authenticated_email,
                                     "already_authenticated": authenticated and not verified,
+                                }
+                            ),
+                        }
+                    )
+                    continue
+
+                tool_spec = tool_specs_by_name.get(tool_name)
+                schema = (tool_spec or {}).get("input_schema") or (tool_spec or {}).get("inputSchema")
+                missing_required = [field for field in required_tool_args(schema) if field not in tool_args]
+                if missing_required:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id"),
+                            "name": tool_name,
+                            "content": json.dumps(
+                                {
+                                    "error": "MISSING_REQUIRED_ARGS",
+                                    "message": f"Missing required argument(s): {', '.join(missing_required)}",
+                                }
+                            ),
+                        }
+                    )
+                    continue
+
+                if tool_name == "create_order" and needs_order_confirmation(user_message):
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id"),
+                            "name": tool_name,
+                            "content": json.dumps(
+                                {
+                                    "error": "ORDER_CONFIRMATION_REQUIRED",
+                                    "message": "Please confirm you want to place this order before I create it.",
                                 }
                             ),
                         }

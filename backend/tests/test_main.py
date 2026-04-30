@@ -235,6 +235,88 @@ def test_chat_hides_verify_tool_when_session_already_authenticated(monkeypatch) 
     assert payload["session"]["email"] == "donaldgarcia@example.net"
 
 
+def test_chat_blocks_sensitive_customer_tool_without_auth(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [{"name": "get_customer", "input_schema": {"type": "object", "required": ["customer_id"]}}]
+
+    responses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-customer",
+                    "type": "function",
+                    "function": {"name": "get_customer", "arguments": '{"customer_id":"abc"}'},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please verify first."},
+    ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return responses.pop(0)
+
+    async def fail_if_called(self, name, arguments):
+        raise AssertionError("Sensitive tool should not be called before auth")
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fail_if_called)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    response = client.post("/chat", json={"message": "show customer details"})
+    assert response.status_code == 200
+    assert response.json()["reply"] == "Please verify first."
+
+
+def test_chat_requires_explicit_confirmation_before_create_order(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [
+            {
+                "name": "create_order",
+                "input_schema": {"type": "object", "required": ["customer_id", "items"]},
+            }
+        ]
+
+    responses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-create",
+                    "type": "function",
+                    "function": {"name": "create_order", "arguments": '{"customer_id":"abc","items":[{"sku":"COM-0001","quantity":1}]}'},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please confirm order creation first."},
+    ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return responses.pop(0)
+
+    async def fail_if_called(self, name, arguments):
+        raise AssertionError("create_order should be blocked until explicit confirmation")
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fail_if_called)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    response = client.post(
+        "/chat",
+        json={"message": "create an order for me", "session": {"authenticated": True, "email": "donaldgarcia@example.net"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["reply"] == "Please confirm order creation first."
+
+
 def test_chat_rejects_stream_mode() -> None:
     response = client.post("/chat", json={"message": "hello", "stream": True})
     assert response.status_code == 400

@@ -203,6 +203,38 @@ def test_chat_blocks_order_tool_without_auth(monkeypatch) -> None:
     assert payload["request_id"]
 
 
+def test_chat_hides_verify_tool_when_session_already_authenticated(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [
+            {"name": "verify_customer_pin", "input_schema": {"type": "object"}},
+            {"name": "get_order_status", "input_schema": {"type": "object"}},
+        ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        tool_names = [entry.get("function", {}).get("name") for entry in tools]
+        assert "verify_customer_pin" not in tool_names
+        assert "get_order_status" in tool_names
+        return {"role": "assistant", "content": "Order A100 is in transit."}
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "track my recent order",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["authenticated"] is True
+    assert payload["session"]["email"] == "donaldgarcia@example.net"
+
+
 def test_chat_rejects_stream_mode() -> None:
     response = client.post("/chat", json={"message": "hello", "stream": True})
     assert response.status_code == 400

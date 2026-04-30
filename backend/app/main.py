@@ -302,6 +302,12 @@ def to_tool_definitions(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return formatted
 
 
+def filter_tools_for_session(tools: list[dict[str, Any]], authenticated: bool) -> list[dict[str, Any]]:
+    if not authenticated:
+        return tools
+    return [tool for tool in tools if str(tool.get("name", "")).lower() != "verify_customer_pin"]
+
+
 def parse_tool_args(raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
@@ -704,11 +710,20 @@ async def chat(payload: ChatRequest) -> ChatResponse:
         except httpx.HTTPError as error:
             raise HTTPException(status_code=502, detail="MCP failed while listing tools") from error
 
-        tool_definitions = to_tool_definitions(available_tools)
-        allowed_tool_names = {str(tool.get("name", "")) for tool in available_tools}
+        session_tools = filter_tools_for_session(available_tools, authenticated=authenticated)
+        tool_definitions = to_tool_definitions(session_tools)
+        allowed_tool_names = {str(tool.get("name", "")) for tool in session_tools}
+        if authenticated:
+            allowed_tool_names.add("verify_customer_pin")
+
+        session_context = (
+            f"Session state: authenticated={authenticated}, email={authenticated_email or 'unknown'}.\n"
+            "If authenticated is true, do NOT ask for email/PIN again unless the customer explicitly asks to re-verify."
+        )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": f"{system_prompt}\n\n{auth_instructions}\n\n{tool_policy}"},
+            {"role": "system", "content": session_context},
             {"role": "user", "content": user_message},
         ]
 

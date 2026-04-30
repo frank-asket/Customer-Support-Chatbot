@@ -90,32 +90,32 @@ export default function AuthPage() {
         <div className="auth-content">
           <article className="auth-intro">
             <p className="auth-kicker">Secure Access</p>
-            <h1>Secure verification for your account</h1>
+            <h1>Identity verification for protected order access</h1>
             <p>
-              Verify your email and 4-digit PIN to unlock order tracking, shipment updates, and account-specific
-              support.
+              Verify your email and 4-digit PIN to access shipment status, order history, and account-specific support
+              actions.
             </p>
             <div className="lp-trust auth-trust">
-              <span>Secure verification step</span>
-              <span>Instant access to order support</span>
-              <span>One-click sign out in chat</span>
+              <span>Credential-gated support actions</span>
+              <span>Immediate access to verified workflows</span>
+              <span>Session reset available anytime</span>
             </div>
             <div className="auth-assurance">
-              <h3>Why verification matters</h3>
+              <h3>Why verification is required</h3>
               <ul>
-                <li>Protects order history and shipment addresses from unauthorized access.</li>
-                <li>Enables personalized replies using your latest order context.</li>
-                <li>Takes less than 10 seconds with your email and 4-digit PIN.</li>
+                <li>Prevents unauthorized access to order history and shipment addresses.</li>
+                <li>Enables precise responses using your current account and order context.</li>
+                <li>Completes in seconds using your registered email and 4-digit PIN.</li>
               </ul>
             </div>
           </article>
 
           <section className="auth-card">
             <div className="auth-card-head">
-              <h2>Verify your details</h2>
+              <h2>Verify credentials</h2>
               <span className="auth-pill">Step 1 of 1</span>
             </div>
-            <p className="auth-card-subtitle">We use this to protect order history and shipment information.</p>
+            <p className="auth-card-subtitle">Required before any account-level order operations can be executed.</p>
             <form onSubmit={onSubmit} className="auth-form">
               <label htmlFor="email">Email</label>
               <input
@@ -155,13 +155,13 @@ export default function AuthPage() {
               </div>
 
               <ul className="auth-checklist" aria-label="Verification requirements">
-                <li>Use the same email you provided during checkout.</li>
+                <li>Use the same email associated with your Meridian order.</li>
                 <li>PIN must be exactly 4 digits.</li>
-                <li>After verification, order tools unlock automatically in chat.</li>
+                <li>Order-specific tools unlock automatically after successful verification.</li>
               </ul>
 
               <button className="btn btn-primary auth-submit" type="submit" disabled={loading || !canSubmit}>
-                {loading ? "Verifying..." : "Verify and continue"}
+                {loading ? "Verifying..." : "Verify and continue to support"}
               </button>
             </form>
             <div aria-live="polite">
@@ -169,7 +169,7 @@ export default function AuthPage() {
               {error ? <p className="auth-error">{error}</p> : null}
             </div>
             <p className="auth-back">
-              Need general help first? <Link href="/chat">Go to chat</Link>
+              Need general guidance first? <Link href="/chat">Open chat</Link>
             </p>
           </section>
         </div>

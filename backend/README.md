@@ -60,3 +60,10 @@ cd backend
 source .venv/bin/activate
 pytest -q
 ```
+
+## Railway deploy note
+
+- When deploying with Docker on Railway, your app must bind to the runtime `PORT` environment variable.
+- The project Dockerfile already does this via:
+  - `uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}`
+- If port is hardcoded to `8000`, Railway health checks may fail and upstream callers (like Vercel API routes) can return `502`.

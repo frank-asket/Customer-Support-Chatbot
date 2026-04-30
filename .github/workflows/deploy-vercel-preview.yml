@@ -1,0 +1,32 @@
+name: Deploy Frontend Preview to Vercel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-vercel-preview.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vercel-preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Trigger Vercel Preview Deploy Hook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Vercel hook secret
+        run: |
+          if [ -z "${{ secrets.VERCEL_PREVIEW_DEPLOY_HOOK_URL }}" ]; then
+            echo "Missing required secret: VERCEL_PREVIEW_DEPLOY_HOOK_URL"
+            exit 1
+          fi
+
+      - name: Trigger Vercel preview deploy
+        run: |
+          curl --fail --show-error --silent \
+            -X POST \
+            "${{ secrets.VERCEL_PREVIEW_DEPLOY_HOOK_URL }}"

@@ -14,8 +14,8 @@ export default function HomePage() {
             { href: "#security", label: "Security" },
             { href: "#support", label: "Support" }
           ]}
-          ctaHref="/chat"
-          ctaLabel="Open chat"
+          ctaHref="/auth"
+          ctaLabel="Verify account"
         />
 
         <div className="lp-grid">

@@ -89,20 +89,32 @@ export default function AuthPage() {
 
         <div className="auth-content">
           <article className="auth-intro">
+            <p className="auth-kicker">Secure Access</p>
             <h1>Secure verification for your account</h1>
             <p>
               Verify your email and 4-digit PIN to unlock order tracking, shipment updates, and account-specific
               support.
             </p>
-            <div className="lp-trust">
+            <div className="lp-trust auth-trust">
               <span>Secure verification step</span>
               <span>Instant access to order support</span>
               <span>One-click sign out in chat</span>
             </div>
+            <div className="auth-assurance">
+              <h3>Why verification matters</h3>
+              <ul>
+                <li>Protects order history and shipment addresses from unauthorized access.</li>
+                <li>Enables personalized replies using your latest order context.</li>
+                <li>Takes less than 10 seconds with your email and 4-digit PIN.</li>
+              </ul>
+            </div>
           </article>
 
           <section className="auth-card">
-            <h2>Verify your details</h2>
+            <div className="auth-card-head">
+              <h2>Verify your details</h2>
+              <span className="auth-pill">Step 1 of 1</span>
+            </div>
             <p className="auth-card-subtitle">We use this to protect order history and shipment information.</p>
             <form onSubmit={onSubmit} className="auth-form">
               <label htmlFor="email">Email</label>

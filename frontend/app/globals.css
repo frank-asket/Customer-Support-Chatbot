@@ -385,12 +385,52 @@ a {
   color: #111827;
 }
 
+.auth-kicker {
+  margin: 0 0 0.55rem;
+  display: inline-block;
+  padding: 0.32rem 0.62rem;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .auth-intro p {
   margin: 1rem 0 0;
   max-width: 45ch;
   color: #475569;
   font-size: 1.03rem;
   line-height: 1.6;
+}
+
+.auth-trust {
+  margin-top: 1.25rem;
+}
+
+.auth-assurance {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.auth-assurance h3 {
+  margin: 0 0 0.6rem;
+  color: #0f172a;
+  font-size: 0.98rem;
+}
+
+.auth-assurance ul {
+  margin: 0;
+  padding-left: 1rem;
+  color: #475569;
+  font-size: 0.9rem;
+  display: grid;
+  gap: 0.4rem;
 }
 
 .auth-card {
@@ -406,6 +446,23 @@ a {
 .auth-card h2 {
   margin: 0;
   font-size: 1.3rem;
+}
+
+.auth-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.auth-pill {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e40af;
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .auth-card h1 {
@@ -435,6 +492,7 @@ a {
   border-radius: 10px;
   padding: 0.68rem 0.75rem;
   font-size: 0.97rem;
+  background: #fff;
 }
 
 .auth-form input:focus-visible {
@@ -444,6 +502,40 @@ a {
 
 .auth-form button {
   margin-top: 0.5rem;
+}
+
+.auth-pin-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.auth-pin-row input {
+  flex: 1;
+}
+
+.auth-pin-toggle {
+  margin-top: 0;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-checklist {
+  margin: 0.4rem 0 0.15rem;
+  padding-left: 1rem;
+  color: #64748b;
+  font-size: 0.86rem;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.auth-submit {
+  width: 100%;
 }
 
 .auth-success {

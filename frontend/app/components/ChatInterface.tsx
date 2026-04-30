@@ -88,10 +88,11 @@ export default function ChatInterface() {
         if (Array.isArray(data.suggested_prompts)) {
           setCapabilityPrompts(data.suggested_prompts.slice(0, 5));
         }
-        if (data.helper_message) {
+        const helperMessage = data.helper_message;
+        if (helperMessage) {
           setMessages((prev) => {
-            const alreadyAdded = prev.some((msg) => msg.role === "assistant" && msg.text === data.helper_message);
-            return alreadyAdded ? prev : [...prev, { role: "assistant", text: data.helper_message }];
+            const alreadyAdded = prev.some((msg) => msg.role === "assistant" && msg.text === helperMessage);
+            return alreadyAdded ? prev : [...prev, { role: "assistant", text: helperMessage }];
           });
         }
       } catch {

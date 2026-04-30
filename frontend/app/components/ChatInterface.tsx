@@ -20,9 +20,10 @@ type ChatEntry = {
 };
 
 const QUICK_PROMPTS = [
-  "Do you have iPhone 15 Pro in stock?",
+  "Search products for wireless noise-cancelling headphones",
+  "Show my recent orders",
   "Track my recent order",
-  "What is your return policy?"
+  "Create a new order for 1 unit of iPhone 15 Pro"
 ];
 const SESSION_KEY = "meridian_support_session";
 

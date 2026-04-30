@@ -269,6 +269,17 @@ def normalize_tool_response(raw: Any) -> dict[str, Any] | None:
     return None
 
 
+def normalize_tool_items(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if isinstance(raw, dict):
+        for key in ("orders", "items", "results", "data"):
+            value = raw.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
 def to_tool_definitions(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     formatted = []
     for tool in tools:
@@ -443,6 +454,7 @@ async def fetch_customer_context_from_mcp(email: str, server_url: str) -> dict[s
             first_tool_name(tools, "customer", "profile")
             or first_tool_name(tools, "customer", "details")
             or first_tool_name(tools, "lookup", "customer")
+            or first_tool_name(tools, "get", "customer")
             or first_tool_name(tools, "customer")
         )
         # Dedicated latest-order tool.
@@ -451,6 +463,8 @@ async def fetch_customer_context_from_mcp(email: str, server_url: str) -> dict[s
             or first_tool_name(tools, "recent", "order")
             or first_tool_name(tools, "order", "summary")
             or first_tool_name(tools, "order", "status")
+            or first_tool_name(tools, "list", "orders")
+            or first_tool_name(tools, "get", "order")
             or first_tool_name(tools, "orders")
         )
         if not profile_tool and not order_tool:
@@ -477,6 +491,44 @@ async def fetch_customer_context_from_mcp(email: str, server_url: str) -> dict[s
 
         profile_payload = await fetch_payload(profile_tool)
         order_payload = await fetch_payload(order_tool)
+
+        # If we can list orders, derive latest order and hydrate details.
+        if order_tool and "list" in order_tool.lower():
+            order_list_payload: dict[str, Any] | None = order_payload
+            order_items = normalize_tool_items(order_list_payload)
+            if order_items:
+                latest = order_items[0]
+                latest_order_id = (
+                    latest.get("order_id")
+                    or latest.get("id")
+                    or latest.get("orderId")
+                    or latest.get("number")
+                )
+                if isinstance(latest_order_id, str) and latest_order_id.strip():
+                    get_order_tool = (
+                        first_tool_name(tools, "get", "order")
+                        or first_tool_name(tools, "order", "details")
+                    )
+                    if get_order_tool:
+                        detail_candidate_args = [
+                            {"order_id": latest_order_id},
+                            {"id": latest_order_id},
+                            {"orderId": latest_order_id},
+                        ]
+                        for args in detail_candidate_args:
+                            try:
+                                detail_raw = await mcp.call_tool(get_order_tool, args)
+                            except httpx.HTTPError:
+                                continue
+                            detail_payload = normalize_tool_response(detail_raw)
+                            if detail_payload:
+                                order_payload = {**latest, **detail_payload}
+                                break
+                        else:
+                            order_payload = latest
+                    else:
+                        order_payload = latest
+
         return resolve_customer_context(email, profile_payload, order_payload)
 
 

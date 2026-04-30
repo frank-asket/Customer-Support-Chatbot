@@ -6,6 +6,7 @@ import MessageBubble from "@/app/components/MessageBubble";
 type Session = {
   authenticated: boolean;
   email: string | null;
+  authToken?: string | null;
   customerContext?: {
     first_name: string;
     last_order_id: string;
@@ -38,7 +39,7 @@ function buildWelcomeMessage(session: Session): string {
 export default function ChatInterface() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatEntry[]>([]);
-  const [session, setSession] = useState<Session>({ authenticated: false, email: null });
+  const [session, setSession] = useState<Session>({ authenticated: false, email: null, authToken: null });
   const [sessionReady, setSessionReady] = useState(false);
   const [capabilityPrompts, setCapabilityPrompts] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -56,6 +57,7 @@ export default function ChatInterface() {
         const nextSession = {
           authenticated: parsed.authenticated,
           email: parsed.email ?? null,
+          authToken: parsed.authToken ?? null,
           customerContext: parsed.customerContext ?? null
         };
         setSession(nextSession);
@@ -119,7 +121,8 @@ export default function ChatInterface() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: nextInput,
-          session: { authenticated: session.authenticated, email: session.email }
+          session: { authenticated: session.authenticated, email: session.email },
+          auth_token: session.authToken ?? null
         })
       });
 
@@ -147,6 +150,7 @@ export default function ChatInterface() {
         setSession((prev) => ({
           authenticated: data.session?.authenticated ?? prev.authenticated,
           email: data.session?.email ?? prev.email,
+          authToken: data.session?.authenticated ? prev.authToken ?? null : null,
           customerContext: data.session?.authenticated ? prev.customerContext ?? null : null
         }));
       }
@@ -170,7 +174,7 @@ export default function ChatInterface() {
             <button
               type="button"
               onClick={() => {
-                setSession({ authenticated: false, email: null });
+                setSession({ authenticated: false, email: null, authToken: null });
                 localStorage.removeItem(SESSION_KEY);
                 setMessages([]);
               }}
@@ -202,7 +206,7 @@ export default function ChatInterface() {
             onClick={() => {
               setMessages([]);
               setLastRequestId(null);
-              setSession({ authenticated: false, email: null });
+              setSession({ authenticated: false, email: null, authToken: null });
               localStorage.removeItem(SESSION_KEY);
             }}
             className="chat-chip-btn chat-chip-secondary"

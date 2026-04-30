@@ -42,6 +42,7 @@ export default function AuthPage() {
         email?: string | null;
         message?: string;
         customer_context?: CustomerContext | null;
+        auth_token?: string | null;
         error?: string;
         details?: string;
       };
@@ -57,7 +58,8 @@ export default function AuthPage() {
           JSON.stringify({
             authenticated: true,
             email: data.email ?? email.trim().toLowerCase(),
-            customerContext: data.customer_context ?? null
+            customerContext: data.customer_context ?? null,
+            authToken: data.auth_token ?? null
           })
         );
         setMessage(data.message ?? "Verification successful.");

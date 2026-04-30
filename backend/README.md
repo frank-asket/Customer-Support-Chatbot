@@ -33,6 +33,7 @@ uvicorn app.main:app --reload --port 8000
 - `HTTP_RETRY_BACKOFF_SECONDS`: Exponential backoff base seconds (default: `0.5`)
 - `TOOL_LOOP_LIMIT`: Max assistant tool-call iterations per request (default: `4`)
 - `MAX_USER_MESSAGE_CHARS`: Input guardrail for user message size (default: `2000`)
+- `AUTH_TOKEN_SECRET`: Secret used to sign auth tokens returned by `/auth/verify` and validated by `/chat` (required in production)
 - `MAX_TOOL_ARGUMENTS_CHARS`: Guardrail for tool argument payload size (default: `4000`)
 
 ### Model Routing Behavior

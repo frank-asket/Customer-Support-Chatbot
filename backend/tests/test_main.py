@@ -7,6 +7,10 @@ from backend.app import main
 client = TestClient(main.app)
 
 
+def issue_token(email: str) -> str:
+    return main.create_auth_token(email, ttl_seconds=3600)
+
+
 def test_health_returns_ok() -> None:
     response = client.get("/health")
     assert response.status_code == 200
@@ -45,6 +49,7 @@ def test_auth_verify_success() -> None:
     assert payload["authenticated"] is True
     assert payload["email"] == "donaldgarcia@example.net"
     assert payload["customer_context"]["last_order_id"] == "A100"
+    assert payload["auth_token"]
 
 
 def test_auth_verify_failure() -> None:
@@ -203,6 +208,50 @@ def test_chat_blocks_order_tool_without_auth(monkeypatch) -> None:
     assert payload["request_id"]
 
 
+def test_chat_ignores_client_authenticated_flag_without_token(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [{"name": "get_order_status", "input_schema": {"type": "object"}}]
+
+    responses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "get_order_status", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please verify email and PIN first."},
+    ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return responses.pop(0)
+
+    async def fail_if_called(self, name, arguments):
+        raise AssertionError("Order tool should not be called without valid token auth")
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fail_if_called)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "track my order",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": None,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["session"]["authenticated"] is False
+
+
 def test_chat_hides_verify_tool_when_session_already_authenticated(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
@@ -222,11 +271,13 @@ def test_chat_hides_verify_tool_when_session_already_authenticated(monkeypatch) 
     monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
     monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
 
+    auth_token = issue_token("donaldgarcia@example.net")
     response = client.post(
         "/chat",
         json={
             "message": "track my recent order",
             "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": auth_token,
         },
     )
     assert response.status_code == 200
@@ -251,11 +302,13 @@ def test_chat_overrides_redundant_pin_prompt_for_authenticated_user(monkeypatch)
     monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
     monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
 
+    auth_token = issue_token("donaldgarcia@example.net")
     response = client.post(
         "/chat",
         json={
             "message": "Track my recent order",
             "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": auth_token,
         },
     )
     assert response.status_code == 200
@@ -338,9 +391,14 @@ def test_chat_requires_explicit_confirmation_before_create_order(monkeypatch) ->
     monkeypatch.setattr(main.MCPService, "call_tool", fail_if_called)
     monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
 
+    auth_token = issue_token("donaldgarcia@example.net")
     response = client.post(
         "/chat",
-        json={"message": "create an order for me", "session": {"authenticated": True, "email": "donaldgarcia@example.net"}},
+        json={
+            "message": "create an order for me",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": auth_token,
+        },
     )
     assert response.status_code == 200
     assert response.json()["reply"] == "Please confirm order creation first."
@@ -483,11 +541,13 @@ def test_chat_keeps_existing_auth_if_model_reverifies_without_credentials(monkey
     monkeypatch.setattr(main.MCPService, "call_tool", fake_call_tool)
     monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
 
+    auth_token = issue_token("donaldgarcia@example.net")
     response = client.post(
         "/chat",
         json={
             "message": "track my order",
             "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": auth_token,
         },
     )
     assert response.status_code == 200

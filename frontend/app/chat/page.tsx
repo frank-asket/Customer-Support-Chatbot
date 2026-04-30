@@ -19,8 +19,8 @@ export default function ChatPage() {
         router.replace("/auth");
         return;
       }
-      const parsed = JSON.parse(raw) as { authenticated?: boolean };
-      if (parsed.authenticated) {
+      const parsed = JSON.parse(raw) as { authenticated?: boolean; authToken?: string | null };
+      if (parsed.authenticated && parsed.authToken) {
         setIsAuthorized(true);
         return;
       }

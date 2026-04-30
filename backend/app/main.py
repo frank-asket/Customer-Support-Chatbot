@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +69,7 @@ class SessionState(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session: SessionState | None = None
+    auth_token: str | None = None
     stream: bool = False
 
 
@@ -84,6 +89,8 @@ class AuthVerifyResponse(BaseModel):
     email: str | None
     message: str
     customer_context: dict[str, str] | None = None
+    auth_token: str | None = None
+    auth_token_expires_in: int | None = None
 
 
 class CapabilitiesResponse(BaseModel):
@@ -390,6 +397,38 @@ def parse_optional_str_env(name: str) -> str | None:
     return stripped or None
 
 
+def auth_token_secret() -> str:
+    return os.getenv("AUTH_TOKEN_SECRET", "local-dev-auth-secret-change-me")
+
+
+def create_auth_token(email: str, *, ttl_seconds: int = 3600) -> str:
+    exp = int(time.time()) + ttl_seconds
+    payload = f"{email}|{exp}"
+    signature = hmac.new(auth_token_secret().encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    token_raw = f"{email}|{exp}|{signature}"
+    return base64.urlsafe_b64encode(token_raw.encode("utf-8")).decode("utf-8")
+
+
+def validate_auth_token(token: str | None) -> tuple[bool, str | None]:
+    if not token:
+        return False, None
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        email, exp_raw, signature = decoded.split("|", 2)
+        exp = int(exp_raw)
+    except Exception:
+        return False, None
+
+    if exp < int(time.time()):
+        return False, None
+
+    payload = f"{email}|{exp}"
+    expected = hmac.new(auth_token_secret().encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return False, None
+    return True, email
+
+
 def unique_models(*models: str | None) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -664,6 +703,8 @@ async def verify_auth(payload: AuthVerifyRequest) -> AuthVerifyResponse:
     pin = payload.pin.strip()
     authenticated = AUTH_REGISTRY.get(email) == pin
     if authenticated:
+        token_ttl_seconds = 3600
+        token = create_auth_token(email, ttl_seconds=token_ttl_seconds)
         customer_context = None
         mcp_server_url = os.getenv("MCP_SERVER_URL")
         if mcp_server_url:
@@ -678,12 +719,16 @@ async def verify_auth(payload: AuthVerifyRequest) -> AuthVerifyResponse:
             email=email,
             message="Verification successful. You can now access order-related support.",
             customer_context=customer_context,
+            auth_token=token,
+            auth_token_expires_in=token_ttl_seconds,
         )
     return AuthVerifyResponse(
         authenticated=False,
         email=None,
         message="Verification failed. Please check your email and PIN.",
         customer_context=None,
+        auth_token=None,
+        auth_token_expires_in=None,
     )
 
 
@@ -715,8 +760,9 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     tool_policy = load_prompt(TOOL_POLICY_PATH)
 
     session = payload.session or SessionState()
-    authenticated = session.authenticated
-    authenticated_email = session.email
+    token_authenticated, token_email = validate_auth_token(payload.auth_token)
+    authenticated = token_authenticated
+    authenticated_email = token_email
 
     timeout = httpx.Timeout(settings.http_timeout_seconds)
     async with httpx.AsyncClient(timeout=timeout) as client:

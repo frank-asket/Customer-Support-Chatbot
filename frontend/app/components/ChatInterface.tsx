@@ -19,12 +19,6 @@ type ChatEntry = {
   text: string;
 };
 
-const QUICK_PROMPTS = [
-  "Search products for wireless noise-cancelling headphones",
-  "Show my recent orders",
-  "Track my recent order",
-  "Create a new order for 1 unit of iPhone 15 Pro"
-];
 const SESSION_KEY = "meridian_support_session";
 
 function buildWelcomeMessage(session: Session): string {
@@ -46,6 +40,7 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [session, setSession] = useState<Session>({ authenticated: false, email: null });
   const [sessionReady, setSessionReady] = useState(false);
+  const [capabilityPrompts, setCapabilityPrompts] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastRequestId, setLastRequestId] = useState<string | null>(null);
 
@@ -79,6 +74,35 @@ export default function ChatInterface() {
     if (!sessionReady) return;
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   }, [session, sessionReady]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadCapabilities() {
+      try {
+        const response = await fetch("/api/capabilities");
+        const data = (await response.json()) as {
+          helper_message?: string;
+          suggested_prompts?: string[];
+        };
+        if (!active || !response.ok) return;
+        if (Array.isArray(data.suggested_prompts)) {
+          setCapabilityPrompts(data.suggested_prompts.slice(0, 5));
+        }
+        if (data.helper_message) {
+          setMessages((prev) => {
+            const alreadyAdded = prev.some((msg) => msg.role === "assistant" && msg.text === data.helper_message);
+            return alreadyAdded ? prev : [...prev, { role: "assistant", text: data.helper_message }];
+          });
+        }
+      } catch {
+        // Best effort only; chat remains usable without capabilities metadata.
+      }
+    }
+    loadCapabilities();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function onSend() {
     const nextInput = input.trim();
@@ -161,7 +185,7 @@ export default function ChatInterface() {
         {lastRequestId ? <p className="chat-request-id">Last request: {lastRequestId}</p> : null}
 
         <div className="chat-chips-row">
-          {QUICK_PROMPTS.map((prompt) => (
+          {capabilityPrompts.map((prompt) => (
             <button
               key={prompt}
               type="button"

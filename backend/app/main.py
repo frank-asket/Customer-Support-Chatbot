@@ -84,6 +84,12 @@ class AuthVerifyResponse(BaseModel):
     customer_context: dict[str, str] | None = None
 
 
+class CapabilitiesResponse(BaseModel):
+    tools: list[str]
+    helper_message: str
+    suggested_prompts: list[str]
+
+
 @dataclass(frozen=True)
 class Settings:
     model: str
@@ -532,6 +538,33 @@ async def fetch_customer_context_from_mcp(email: str, server_url: str) -> dict[s
         return resolve_customer_context(email, profile_payload, order_payload)
 
 
+def build_capabilities_payload(tool_names: list[str]) -> CapabilitiesResponse:
+    lowered = {name.lower() for name in tool_names}
+    suggestions: list[str] = []
+    if any("search_products" in name or "list_products" in name for name in lowered):
+        suggestions.append("Search products for wireless noise-cancelling headphones")
+    if any("get_product" in name for name in lowered):
+        suggestions.append("Get product details for iPhone 15 Pro")
+    if any("list_orders" in name for name in lowered):
+        suggestions.append("Show my recent orders")
+    if any("get_order" in name for name in lowered):
+        suggestions.append("Track my recent order")
+    if any("create_order" in name for name in lowered):
+        suggestions.append("Create a new order for 1 unit of iPhone 15 Pro")
+    if not suggestions:
+        suggestions = ["How can you help me today?"]
+
+    helper = (
+        "Live MCP capabilities loaded. I can help with product search/details, customer verification, "
+        "order lookup, and order creation when available."
+    )
+    return CapabilitiesResponse(
+        tools=tool_names,
+        helper_message=helper,
+        suggested_prompts=suggestions,
+    )
+
+
 app = FastAPI(title="Meridian AI Support Backend", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -545,6 +578,24 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/capabilities", response_model=CapabilitiesResponse)
+async def capabilities() -> CapabilitiesResponse:
+    mcp_server_url = os.getenv("MCP_SERVER_URL")
+    if not mcp_server_url:
+        return build_capabilities_payload([])
+
+    timeout = httpx.Timeout(15.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        mcp = MCPService(mcp_server_url, client)
+        try:
+            tools = await mcp.list_tools()
+        except (httpx.TimeoutException, httpx.HTTPError):
+            return build_capabilities_payload([])
+
+    tool_names = [str(tool.get("name", "")).strip() for tool in tools if str(tool.get("name", "")).strip()]
+    return build_capabilities_payload(tool_names)
 
 
 @app.post("/auth/verify", response_model=AuthVerifyResponse)

@@ -13,6 +13,27 @@ def test_health_returns_ok() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_capabilities_returns_live_tool_prompts(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [
+            {"name": "search_products"},
+            {"name": "list_orders"},
+            {"name": "create_order"},
+        ]
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+
+    response = client.get("/capabilities")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "search_products" in payload["tools"]
+    assert any("Search products" in prompt for prompt in payload["suggested_prompts"])
+    assert any("Show my recent orders" == prompt for prompt in payload["suggested_prompts"])
+    assert any("Create a new order" in prompt for prompt in payload["suggested_prompts"])
+
+
 def test_auth_verify_success() -> None:
     response = client.post(
         "/auth/verify",

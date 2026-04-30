@@ -44,13 +44,17 @@ export default function ChatInterface() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [session, setSession] = useState<Session>({ authenticated: false, email: null });
+  const [sessionReady, setSessionReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastRequestId, setLastRequestId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
-      if (!raw) return;
+      if (!raw) {
+        setSessionReady(true);
+        return;
+      }
       const parsed = JSON.parse(raw) as Session;
       if (typeof parsed.authenticated === "boolean") {
         const nextSession = {
@@ -65,16 +69,19 @@ export default function ChatInterface() {
       }
     } catch {
       localStorage.removeItem(SESSION_KEY);
+    } finally {
+      setSessionReady(true);
     }
   }, []);
 
   useEffect(() => {
+    if (!sessionReady) return;
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  }, [session]);
+  }, [session, sessionReady]);
 
   async function onSend() {
     const nextInput = input.trim();
-    if (!nextInput || loading) return;
+    if (!nextInput || loading || !sessionReady) return;
 
     setMessages((prev) => [...prev, { role: "user", text: nextInput }]);
     setInput("");
@@ -158,7 +165,7 @@ export default function ChatInterface() {
               key={prompt}
               type="button"
               onClick={() => setInput(prompt)}
-              disabled={loading}
+              disabled={loading || !sessionReady}
               className="chat-chip-btn"
             >
               {prompt}
@@ -192,16 +199,17 @@ export default function ChatInterface() {
             onKeyDown={(e) => {
               if (e.key === "Enter") onSend();
             }}
-            placeholder="Ask about products or orders..."
+            placeholder={sessionReady ? "Ask about products or orders..." : "Preparing your session..."}
             className="chat-input"
+            disabled={!sessionReady}
           />
           <button
             type="button"
             onClick={onSend}
-            disabled={loading}
+            disabled={loading || !sessionReady}
             className="chat-send-btn"
           >
-            {loading ? "Sending..." : "Send"}
+            {!sessionReady ? "Loading..." : loading ? "Sending..." : "Send"}
           </button>
         </div>
       </section>

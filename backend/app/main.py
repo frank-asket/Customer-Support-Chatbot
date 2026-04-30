@@ -657,15 +657,27 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                 if tool_name == "verify_customer_pin":
                     email = str(tool_args.get("email", ""))
                     pin = str(tool_args.get("pin", ""))
-                    authenticated = AUTH_REGISTRY.get(email) == pin
-                    authenticated_email = email if authenticated else None
+                    has_credentials = bool(email and pin)
+                    verified = AUTH_REGISTRY.get(email) == pin if has_credentials else False
+                    # Preserve existing verified session if the model redundantly calls
+                    # verify_customer_pin without valid credentials.
+                    if verified:
+                        authenticated = True
+                        authenticated_email = email
+                    elif not authenticated:
+                        authenticated = False
+                        authenticated_email = None
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": call.get("id"),
                             "name": tool_name,
                             "content": json.dumps(
-                                {"authenticated": authenticated, "email": authenticated_email}
+                                {
+                                    "authenticated": authenticated,
+                                    "email": authenticated_email,
+                                    "already_authenticated": authenticated and not verified,
+                                }
                             ),
                         }
                     )

@@ -243,6 +243,60 @@ def test_verify_pin_allows_order_tool_call(monkeypatch) -> None:
     assert "get_order_status" in called_tools
 
 
+def test_chat_keeps_existing_auth_if_model_reverifies_without_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [{"name": "get_order_status", "input_schema": {"type": "object"}}]
+
+    responses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-auth-empty",
+                    "type": "function",
+                    "function": {"name": "verify_customer_pin", "arguments": "{}"},
+                },
+                {
+                    "id": "call-order",
+                    "type": "function",
+                    "function": {"name": "get_order_status", "arguments": '{"order_id":"A100"}'},
+                },
+            ],
+        },
+        {"role": "assistant", "content": "Order A100 is still in transit."},
+    ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return responses.pop(0)
+
+    called_tools: list[str] = []
+
+    async def fake_call_tool(self, name, arguments):
+        called_tools.append(name)
+        return {"status": "in_transit", "order_id": arguments.get("order_id")}
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fake_call_tool)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "track my order",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session"]["authenticated"] is True
+    assert payload["session"]["email"] == "donaldgarcia@example.net"
+    assert "get_order_status" in called_tools
+
+
 def test_model_chain_default_fallback_escalation_order(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")

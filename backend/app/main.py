@@ -540,24 +540,54 @@ async def fetch_customer_context_from_mcp(email: str, server_url: str) -> dict[s
 
 def build_capabilities_payload(tool_names: list[str]) -> CapabilitiesResponse:
     lowered = {name.lower() for name in tool_names}
+    capabilities: list[str] = []
+
+    can_search_products = any("search_products" in name or "list_products" in name for name in lowered)
+    can_product_details = any("get_product" in name for name in lowered)
+    can_customer_lookup = any("get_customer" in name for name in lowered)
+    can_verify_pin = any("verify_customer_pin" in name for name in lowered)
+    can_list_orders = any("list_orders" in name for name in lowered)
+    can_get_order = any("get_order" in name for name in lowered)
+    can_create_order = any("create_order" in name for name in lowered)
+
+    if can_search_products:
+        capabilities.append("search products")
+    if can_product_details:
+        capabilities.append("check product details")
+    if can_customer_lookup:
+        capabilities.append("look up customer account information")
+    if can_verify_pin:
+        capabilities.append("verify your account PIN")
+    if can_list_orders or can_get_order:
+        capabilities.append("look up orders")
+    if can_create_order:
+        capabilities.append("create new orders")
+
     suggestions: list[str] = []
-    if any("search_products" in name or "list_products" in name for name in lowered):
+    if can_search_products:
         suggestions.append("Search products for wireless noise-cancelling headphones")
-    if any("get_product" in name for name in lowered):
+    if can_product_details:
         suggestions.append("Get product details for iPhone 15 Pro")
-    if any("list_orders" in name for name in lowered):
+    if can_list_orders:
         suggestions.append("Show my recent orders")
-    if any("get_order" in name for name in lowered):
+    if can_get_order:
         suggestions.append("Track my recent order")
-    if any("create_order" in name for name in lowered):
+    if can_create_order:
         suggestions.append("Create a new order for 1 unit of iPhone 15 Pro")
     if not suggestions:
         suggestions = ["How can you help me today?"]
 
-    helper = (
-        "Live MCP capabilities loaded. I can help with product search/details, customer verification, "
-        "order lookup, and order creation when available."
-    )
+    if capabilities:
+        if len(capabilities) == 1:
+            capabilities_text = capabilities[0]
+        elif len(capabilities) == 2:
+            capabilities_text = f"{capabilities[0]} and {capabilities[1]}"
+        else:
+            capabilities_text = f"{', '.join(capabilities[:-1])}, and {capabilities[-1]}"
+        helper = f"I can {capabilities_text} right now."
+    else:
+        helper = "I can answer general support questions right now."
+
     return CapabilitiesResponse(
         tools=tool_names,
         helper_message=helper,

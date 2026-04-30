@@ -32,6 +32,7 @@ def test_capabilities_returns_live_tool_prompts(monkeypatch) -> None:
     assert any("Search products" in prompt for prompt in payload["suggested_prompts"])
     assert any("Show my recent orders" == prompt for prompt in payload["suggested_prompts"])
     assert any("Create a new order" in prompt for prompt in payload["suggested_prompts"])
+    assert payload["helper_message"] == "I can search products, look up orders, and create new orders right now."
 
 
 def test_auth_verify_success() -> None:

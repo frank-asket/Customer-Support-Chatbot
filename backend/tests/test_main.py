@@ -13,6 +13,99 @@ def test_health_returns_ok() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_auth_verify_success() -> None:
+    response = client.post(
+        "/auth/verify",
+        json={"email": "donaldgarcia@example.net", "pin": "7912"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authenticated"] is True
+    assert payload["email"] == "donaldgarcia@example.net"
+    assert payload["customer_context"]["last_order_id"] == "A100"
+
+
+def test_auth_verify_failure() -> None:
+    response = client.post(
+        "/auth/verify",
+        json={"email": "donaldgarcia@example.net", "pin": "0000"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authenticated"] is False
+    assert payload["email"] is None
+    assert payload["customer_context"] is None
+
+
+def test_auth_verify_prefers_mcp_customer_context(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [{"name": "get_customer_profile", "input_schema": {"type": "object"}}]
+
+    async def fake_call_tool(self, name, arguments):
+        assert name == "get_customer_profile"
+        assert arguments.get("email") == "donaldgarcia@example.net"
+        return {
+            "first_name": "Don",
+            "last_order_id": "LIVE-700",
+            "last_order_status": "Out for delivery",
+            "primary_request": "Check delivery ETA",
+        }
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fake_call_tool)
+
+    response = client.post(
+        "/auth/verify",
+        json={"email": "donaldgarcia@example.net", "pin": "7912"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authenticated"] is True
+    assert payload["customer_context"]["first_name"] == "Don"
+    assert payload["customer_context"]["last_order_id"] == "LIVE-700"
+
+
+def test_auth_verify_merges_profile_and_order_tools(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [
+            {"name": "get_customer_profile", "input_schema": {"type": "object"}},
+            {"name": "get_latest_order_status", "input_schema": {"type": "object"}},
+        ]
+
+    async def fake_call_tool(self, name, arguments):
+        assert arguments.get("email") == "donaldgarcia@example.net"
+        if name == "get_customer_profile":
+            return {
+                "first_name": "Donald",
+                "primary_request": "Track my latest order",
+            }
+        if name == "get_latest_order_status":
+            return {
+                "order_id": "LIVE-999",
+                "order_status": "Delivered today",
+            }
+        raise AssertionError(f"Unexpected tool call: {name}")
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fake_call_tool)
+
+    response = client.post(
+        "/auth/verify",
+        json={"email": "donaldgarcia@example.net", "pin": "7912"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authenticated"] is True
+    assert payload["customer_context"]["first_name"] == "Donald"
+    assert payload["customer_context"]["last_order_id"] == "LIVE-999"
+    assert payload["customer_context"]["last_order_status"] == "Delivered today"
+    assert payload["customer_context"]["primary_request"] == "Track my latest order"
+
+
 def test_chat_blocks_order_tool_without_auth(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")

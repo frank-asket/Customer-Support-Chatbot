@@ -20,6 +20,26 @@ AUTH_REGISTRY: dict[str, str] = {
     "glee@example.net": "4582",
     "michellejames@example.com": "1520",
 }
+CUSTOMER_CONTEXT_REGISTRY: dict[str, dict[str, str]] = {
+    "donaldgarcia@example.net": {
+        "first_name": "Donald",
+        "last_order_id": "A100",
+        "last_order_status": "In transit, expected tomorrow by 5 PM",
+        "primary_request": "Track my recent order"
+    },
+    "glee@example.net": {
+        "first_name": "Grace",
+        "last_order_id": "B219",
+        "last_order_status": "Delivered on Apr 28",
+        "primary_request": "Check return eligibility for a delivered item"
+    },
+    "michellejames@example.com": {
+        "first_name": "Michelle",
+        "last_order_id": "C771",
+        "last_order_status": "Processing at fulfillment center",
+        "primary_request": "Confirm shipping window and delivery estimate"
+    },
+}
 ORDER_TOOL_KEYWORDS = ("order", "tracking", "history", "shipment")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "google/gemini-1.5-flash"
@@ -50,6 +70,18 @@ class ChatResponse(BaseModel):
     reply: str
     session: SessionState
     request_id: str
+
+
+class AuthVerifyRequest(BaseModel):
+    email: str
+    pin: str
+
+
+class AuthVerifyResponse(BaseModel):
+    authenticated: bool
+    email: str | None
+    message: str
+    customer_context: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -169,6 +201,72 @@ def load_prompt(path: Path) -> str:
 def is_order_tool(name: str) -> bool:
     lowered = name.lower()
     return any(keyword in lowered for keyword in ORDER_TOOL_KEYWORDS)
+
+
+def resolve_customer_context(
+    email: str,
+    profile_source: dict[str, Any] | None = None,
+    order_source: dict[str, Any] | None = None,
+) -> dict[str, str] | None:
+    fallback = CUSTOMER_CONTEXT_REGISTRY.get(email)
+    if profile_source is None and order_source is None and fallback is None:
+        return None
+
+    first_name = (
+        str(profile_source.get("first_name") or profile_source.get("name") or profile_source.get("customer_name") or "").strip()
+        if profile_source
+        else ""
+    )
+    last_order_id = str(
+        (order_source or {}).get("last_order_id")
+        or (order_source or {}).get("order_id")
+        or (order_source or {}).get("latest_order_id")
+        or (profile_source or {}).get("last_order_id")
+        or (profile_source or {}).get("order_id")
+        or (profile_source or {}).get("latest_order_id")
+        or ""
+    ).strip()
+    last_order_status = str(
+        (order_source or {}).get("last_order_status")
+        or (order_source or {}).get("order_status")
+        or (order_source or {}).get("latest_order_status")
+        or (profile_source or {}).get("last_order_status")
+        or (profile_source or {}).get("order_status")
+        or (profile_source or {}).get("latest_order_status")
+        or ""
+    ).strip()
+    primary_request = str(
+        (profile_source or {}).get("primary_request")
+        or (order_source or {}).get("primary_request")
+        or (profile_source or {}).get("reason")
+        or (order_source or {}).get("reason")
+        or (profile_source or {}).get("intent")
+        or (order_source or {}).get("intent")
+        or ""
+    ).strip()
+
+    return {
+        "first_name": first_name or (fallback.get("first_name") if fallback else "Customer"),
+        "last_order_id": last_order_id or (fallback.get("last_order_id") if fallback else "N/A"),
+        "last_order_status": last_order_status or (fallback.get("last_order_status") if fallback else "No recent order status found"),
+        "primary_request": primary_request or (fallback.get("primary_request") if fallback else "General account support"),
+    }
+
+
+def first_tool_name(tools: list[dict[str, Any]], *keywords: str) -> str | None:
+    for tool in tools:
+        name = str(tool.get("name", "")).lower()
+        if all(keyword in name for keyword in keywords):
+            return str(tool.get("name"))
+    return None
+
+
+def normalize_tool_response(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+        return raw[0]
+    return None
 
 
 def to_tool_definitions(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -334,6 +432,54 @@ async def call_with_retries(coro_factory, *, retries: int, backoff_seconds: floa
     raise last_error if last_error else RuntimeError("Call failed")
 
 
+async def fetch_customer_context_from_mcp(email: str, server_url: str) -> dict[str, str] | None:
+    timeout = httpx.Timeout(10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        mcp = MCPService(server_url, client)
+        tools = await mcp.list_tools()
+
+        # Dedicated customer/profile tool.
+        profile_tool = (
+            first_tool_name(tools, "customer", "profile")
+            or first_tool_name(tools, "customer", "details")
+            or first_tool_name(tools, "lookup", "customer")
+            or first_tool_name(tools, "customer")
+        )
+        # Dedicated latest-order tool.
+        order_tool = (
+            first_tool_name(tools, "latest", "order")
+            or first_tool_name(tools, "recent", "order")
+            or first_tool_name(tools, "order", "summary")
+            or first_tool_name(tools, "order", "status")
+            or first_tool_name(tools, "orders")
+        )
+        if not profile_tool and not order_tool:
+            return resolve_customer_context(email)
+
+        candidate_args = [
+            {"email": email},
+            {"customer_email": email},
+            {"user_email": email},
+            {"customerId": email},
+        ]
+        async def fetch_payload(tool_name: str | None) -> dict[str, Any] | None:
+            if not tool_name:
+                return None
+            for args in candidate_args:
+                try:
+                    raw = await mcp.call_tool(tool_name, args)
+                except httpx.HTTPError:
+                    continue
+                payload = normalize_tool_response(raw)
+                if payload is not None:
+                    return payload
+            return None
+
+        profile_payload = await fetch_payload(profile_tool)
+        order_payload = await fetch_payload(order_tool)
+        return resolve_customer_context(email, profile_payload, order_payload)
+
+
 app = FastAPI(title="Meridian AI Support Backend", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -347,6 +493,35 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/auth/verify", response_model=AuthVerifyResponse)
+async def verify_auth(payload: AuthVerifyRequest) -> AuthVerifyResponse:
+    email = payload.email.strip().lower()
+    pin = payload.pin.strip()
+    authenticated = AUTH_REGISTRY.get(email) == pin
+    if authenticated:
+        customer_context = None
+        mcp_server_url = os.getenv("MCP_SERVER_URL")
+        if mcp_server_url:
+            try:
+                customer_context = await fetch_customer_context_from_mcp(email, mcp_server_url)
+            except (httpx.TimeoutException, httpx.HTTPError) as error:
+                logger.warning("MCP customer context lookup failed for %s: %s", email, str(error))
+        if customer_context is None:
+            customer_context = resolve_customer_context(email, None)
+        return AuthVerifyResponse(
+            authenticated=True,
+            email=email,
+            message="Verification successful. You can now access order-related support.",
+            customer_context=customer_context,
+        )
+    return AuthVerifyResponse(
+        authenticated=False,
+        email=None,
+        message="Verification failed. Please check your email and PIN.",
+        customer_context=None,
+    )
 
 
 @app.post("/chat", response_model=ChatResponse)

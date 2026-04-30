@@ -1,53 +1,95 @@
 import Link from "next/link";
+import SiteHeader from "@/app/components/SiteHeader";
+import SiteFooter from "@/app/components/SiteFooter";
 
 export default function HomePage() {
   return (
-    <main className="landing">
-      <section className="hero" aria-labelledby="hero-title">
-        <p className="hero-kicker">Meridian Electronics</p>
-        <h1 id="hero-title">Customer support that answers instantly and acts securely.</h1>
-        <p className="hero-copy">
-          Give customers real-time answers for products, returns, and order questions while enforcing PIN verification
-          before sensitive actions.
-        </p>
-        <div className="hero-actions">
-          <Link className="btn btn-primary" href="/chat">
-            Open live assistant
-          </Link>
-          <a className="btn btn-ghost" href="#how-it-works">
-            See how it works
-          </a>
+    <main className="lp-wrap">
+      <section className="lp-shell" aria-labelledby="hero-title">
+        <SiteHeader
+          navAriaLabel="Main"
+          links={[
+            { href: "#features", label: "Features" },
+            { href: "#orders", label: "Order Help" },
+            { href: "#security", label: "Security" },
+            { href: "#support", label: "Support" }
+          ]}
+          ctaHref="/chat"
+          ctaLabel="Open chat"
+        />
+
+        <div className="lp-grid">
+          <article className="lp-left">
+            <h1 id="hero-title">
+              Get fast answers for your
+              <br />
+              <span>Meridian orders and products</span>
+            </h1>
+            <p>
+              Need help with availability, returns, or tracking? Chat with Meridian Support anytime and verify your
+              account securely before order-specific actions.
+            </p>
+            <div className="lp-actions">
+              <Link className="btn btn-primary" href="/auth">
+                Verify account
+              </Link>
+              <Link href="/chat" className="btn btn-link">
+                Ask a general question
+              </Link>
+              <a href="#features" className="btn btn-link">
+                View features
+              </a>
+            </div>
+            <div className="lp-trust">
+              <span>Live chat support</span>
+              <span>Secure email + PIN verification</span>
+              <span>Order help after verification</span>
+            </div>
+          </article>
+
+          <aside className="lp-right" id="features">
+            <div className="lp-panel lp-chat-mockup">
+              <div className="lp-chat-top">
+                <div>
+                  <h2>ChatInterface Mockup</h2>
+                  <p>Meridian Electronics Support</p>
+                </div>
+                <span className="lp-chat-status">Connected</span>
+              </div>
+
+              <div className="lp-chat-body" aria-label="Meridian chat preview">
+                <div className="lp-bubble lp-bubble-user">Track my order A100</div>
+                <div className="lp-bubble lp-bubble-assistant">
+                  Please provide your email and 4-digit PIN before I access order details.
+                </div>
+                <div className="lp-bubble lp-bubble-user">donaldgarcia@example.net / 7912</div>
+                <div className="lp-bubble lp-bubble-assistant">
+                  Verified. Order A100 is in transit and expected tomorrow by 5 PM.
+                </div>
+              </div>
+
+              <div className="lp-chat-input">
+                <span>Ask about products or orders...</span>
+                <button type="button">Send</button>
+              </div>
+            </div>
+
+            <div className="lp-float lp-float-top">Verify first for order access</div>
+            <div className="lp-float lp-float-bottom">Friendly support, faster answers</div>
+            <div className="lp-arrow" aria-hidden="true">
+              ↷
+            </div>
+          </aside>
         </div>
-      </section>
 
-      <section className="feature-band" aria-label="Core capabilities">
-        <article>
-          <h2>Inventory and order help</h2>
-          <p>Resolve the most common requests without long queues or manual lookup.</p>
-        </article>
-        <article>
-          <h2>Built-in auth guardrails</h2>
-          <p>Order tools only unlock after verified email and PIN checks.</p>
-        </article>
-        <article>
-          <h2>Production-ready routing</h2>
-          <p>Model routing with default, fallback, and escalation control from env vars.</p>
-        </article>
-      </section>
-
-      <section id="how-it-works" className="detail" aria-labelledby="detail-title">
-        <h2 id="detail-title">Designed for support teams that need speed and trust</h2>
-        <p>
-          The assistant runs a tool-calling loop through your MCP server, applies authentication policy before
-          protected order workflows, and returns answers in a clean chat experience your team can ship now.
-        </p>
-      </section>
-
-      <section className="final-cta" aria-label="Call to action">
-        <h2>Ready to test the Meridian AI support flow?</h2>
-        <Link className="btn btn-primary" href="/chat">
-          Start a conversation
-        </Link>
+        <SiteFooter
+          id="support"
+          links={[
+            { href: "#features", label: "Features" },
+            { href: "/auth", label: "Verify account" },
+            { href: "/chat", label: "Open chat" }
+          ]}
+        />
       </section>
     </main>
   );

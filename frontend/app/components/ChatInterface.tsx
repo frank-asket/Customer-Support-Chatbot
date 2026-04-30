@@ -1,11 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import MessageBubble from "@/app/components/MessageBubble";
 
 type Session = {
   authenticated: boolean;
   email: string | null;
+  customerContext?: {
+    first_name: string;
+    last_order_id: string;
+    last_order_status: string;
+    primary_request: string;
+  } | null;
 };
 
 type ChatEntry = {
@@ -18,6 +24,21 @@ const QUICK_PROMPTS = [
   "Track my recent order",
   "What is your return policy?"
 ];
+const SESSION_KEY = "meridian_support_session";
+
+function buildWelcomeMessage(session: Session): string {
+  const context = session.customerContext;
+  const name = context?.first_name || "there";
+  if (!context) {
+    return `Welcome ${name}! Your account is verified. You can now ask about orders, returns, and product support.`;
+  }
+  return [
+    `Welcome ${name}! Your account is verified.`,
+    `I can already see your recent request: "${context.primary_request}".`,
+    `Latest order on file: ${context.last_order_id} (${context.last_order_status}).`,
+    "Ask any follow-up question and I will continue from here."
+  ].join(" ");
+}
 
 export default function ChatInterface() {
   const [input, setInput] = useState("");
@@ -25,6 +46,31 @@ export default function ChatInterface() {
   const [session, setSession] = useState<Session>({ authenticated: false, email: null });
   const [loading, setLoading] = useState(false);
   const [lastRequestId, setLastRequestId] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Session;
+      if (typeof parsed.authenticated === "boolean") {
+        const nextSession = {
+          authenticated: parsed.authenticated,
+          email: parsed.email ?? null,
+          customerContext: parsed.customerContext ?? null
+        };
+        setSession(nextSession);
+        if (nextSession.authenticated) {
+          setMessages([{ role: "assistant", text: buildWelcomeMessage(nextSession) }]);
+        }
+      }
+    } catch {
+      localStorage.removeItem(SESSION_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  }, [session]);
 
   async function onSend() {
     const nextInput = input.trim();
@@ -40,7 +86,7 @@ export default function ChatInterface() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: nextInput,
-          session
+          session: { authenticated: session.authenticated, email: session.email }
         })
       });
 
@@ -64,7 +110,13 @@ export default function ChatInterface() {
         setMessages((prev) => [...prev, { role: "assistant", text: data.reply ?? "No reply." }]);
       }
 
-      if (data.session) setSession(data.session);
+      if (data.session) {
+        setSession((prev) => ({
+          authenticated: data.session?.authenticated ?? prev.authenticated,
+          email: data.session?.email ?? prev.email,
+          customerContext: data.session?.authenticated ? prev.customerContext ?? null : null
+        }));
+      }
       if (data.request_id) setLastRequestId(data.request_id);
     } catch {
       setMessages((prev) => [...prev, { role: "assistant", text: "Network error. Please try again." }]);
@@ -74,37 +126,40 @@ export default function ChatInterface() {
   }
 
   return (
-    <main style={{ display: "grid", placeItems: "center", padding: "24px" }}>
-      <section
-        style={{
-          width: "min(900px, 100%)",
-          border: "1px solid #334155",
-          borderRadius: "12px",
-          padding: "16px",
-          background: "#0f172a"
-        }}
-      >
-        <h1 style={{ marginTop: 0 }}>Meridian Electronics Support</h1>
-        <p style={{ opacity: 0.8 }}>
+    <section className="chat-wrap">
+      <section className="chat-shell">
+        <h1 className="chat-title">Meridian Electronics Support</h1>
+        {session.authenticated ? (
+          <div className="chat-verified-banner">
+            <p className="chat-verified-text">
+              Already verified as <strong>{session.email ?? "customer"}</strong>.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSession({ authenticated: false, email: null });
+                localStorage.removeItem(SESSION_KEY);
+                setMessages([]);
+              }}
+              className="chat-chip-btn"
+            >
+              Sign out
+            </button>
+          </div>
+        ) : null}
+        <p className="chat-subtitle">
           Session auth: {session.authenticated ? `verified (${session.email})` : "not verified"}
         </p>
-        {lastRequestId ? <p style={{ opacity: 0.6, marginTop: "-6px" }}>Last request: {lastRequestId}</p> : null}
+        {lastRequestId ? <p className="chat-request-id">Last request: {lastRequestId}</p> : null}
 
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "10px" }}>
+        <div className="chat-chips-row">
           {QUICK_PROMPTS.map((prompt) => (
             <button
               key={prompt}
               type="button"
               onClick={() => setInput(prompt)}
               disabled={loading}
-              style={{
-                padding: "6px 10px",
-                borderRadius: "999px",
-                border: "1px solid #334155",
-                background: "#111827",
-                color: "#e2e8f0",
-                cursor: "pointer"
-              }}
+              className="chat-chip-btn"
             >
               {prompt}
             </button>
@@ -114,28 +169,23 @@ export default function ChatInterface() {
             onClick={() => {
               setMessages([]);
               setLastRequestId(null);
+              setSession({ authenticated: false, email: null });
+              localStorage.removeItem(SESSION_KEY);
             }}
-            style={{
-              padding: "6px 10px",
-              borderRadius: "999px",
-              border: "1px solid #334155",
-              background: "#1f2937",
-              color: "#e2e8f0",
-              cursor: "pointer"
-            }}
+            className="chat-chip-btn chat-chip-secondary"
           >
-            Clear chat
+            Clear chat + auth
           </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px", minHeight: "300px", marginBottom: "12px" }}>
+        <div className="chat-thread">
           {messages.map((message, idx) => (
             <MessageBubble key={`${message.role}-${idx}`} role={message.role} text={message.text} />
           ))}
           {loading ? <MessageBubble role="assistant" text="Thinking..." /> : null}
         </div>
 
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div className="chat-input-row">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -143,32 +193,18 @@ export default function ChatInterface() {
               if (e.key === "Enter") onSend();
             }}
             placeholder="Ask about products or orders..."
-            style={{
-              flex: 1,
-              padding: "10px 12px",
-              borderRadius: "8px",
-              border: "1px solid #334155",
-              background: "#020617",
-              color: "#f8fafc"
-            }}
+            className="chat-input"
           />
           <button
             type="button"
             onClick={onSend}
             disabled={loading}
-            style={{
-              padding: "10px 14px",
-              borderRadius: "8px",
-              border: "none",
-              background: "#2563eb",
-              color: "#fff",
-              cursor: "pointer"
-            }}
+            className="chat-send-btn"
           >
             {loading ? "Sending..." : "Send"}
           </button>
         </div>
       </section>
-    </main>
+    </section>
   );
 }

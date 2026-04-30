@@ -1,0 +1,175 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { FormEvent, useState } from "react";
+import SiteHeader from "@/app/components/SiteHeader";
+import SiteFooter from "@/app/components/SiteFooter";
+
+const SESSION_KEY = "meridian_support_session";
+type CustomerContext = {
+  first_name: string;
+  last_order_id: string;
+  last_order_status: string;
+  primary_request: string;
+};
+
+export default function AuthPage() {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [pin, setPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const canSubmit = email.trim().length > 3 && /^\d{4}$/.test(pin);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
+    setLoading(true);
+    setMessage(null);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, pin })
+      });
+      const data = (await response.json()) as {
+        authenticated?: boolean;
+        email?: string | null;
+        message?: string;
+        customer_context?: CustomerContext | null;
+        error?: string;
+        details?: string;
+      };
+
+      if (!response.ok) {
+        setError(`${data.error ?? "Verification request failed"}${data.details ? ` (${data.details})` : ""}`);
+        return;
+      }
+
+      if (data.authenticated) {
+        localStorage.setItem(
+          SESSION_KEY,
+          JSON.stringify({
+            authenticated: true,
+            email: data.email ?? email.trim().toLowerCase(),
+            customerContext: data.customer_context ?? null
+          })
+        );
+        setMessage(data.message ?? "Verification successful.");
+        router.push("/chat");
+        return;
+      }
+
+      localStorage.removeItem(SESSION_KEY);
+      setError(data.message ?? "Verification failed. Please check your details.");
+    } catch {
+      setError("Network error while verifying. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="lp-wrap auth-layout">
+      <section className="lp-shell auth-shell">
+        <SiteHeader
+          navAriaLabel="Auth navigation"
+          links={[
+            { href: "/", label: "Home" },
+            { href: "/chat", label: "Chat" }
+          ]}
+          ctaHref="/chat"
+          ctaLabel="Open chat"
+        />
+
+        <div className="auth-content">
+          <article className="auth-intro">
+            <h1>Secure verification for your account</h1>
+            <p>
+              Verify your email and 4-digit PIN to unlock order tracking, shipment updates, and account-specific
+              support.
+            </p>
+            <div className="lp-trust">
+              <span>Secure verification step</span>
+              <span>Instant access to order support</span>
+              <span>One-click sign out in chat</span>
+            </div>
+          </article>
+
+          <section className="auth-card">
+            <h2>Verify your details</h2>
+            <p className="auth-card-subtitle">We use this to protect order history and shipment information.</p>
+            <form onSubmit={onSubmit} className="auth-form">
+              <label htmlFor="email">Email</label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => setEmail((prev) => prev.trim().toLowerCase())}
+                placeholder="you@example.com"
+                autoComplete="email"
+                required
+              />
+
+              <label htmlFor="pin">PIN</label>
+              <div className="auth-pin-row">
+                <input
+                  id="pin"
+                  type={showPin ? "text" : "password"}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="4-digit PIN"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  required
+                  minLength={4}
+                  maxLength={4}
+                  pattern="[0-9]{4}"
+                />
+                <button
+                  type="button"
+                  className="auth-pin-toggle"
+                  onClick={() => setShowPin((prev) => !prev)}
+                  aria-label={showPin ? "Hide PIN" : "Show PIN"}
+                >
+                  {showPin ? "Hide" : "Show"}
+                </button>
+              </div>
+
+              <ul className="auth-checklist" aria-label="Verification requirements">
+                <li>Use the same email you provided during checkout.</li>
+                <li>PIN must be exactly 4 digits.</li>
+                <li>After verification, order tools unlock automatically in chat.</li>
+              </ul>
+
+              <button className="btn btn-primary auth-submit" type="submit" disabled={loading || !canSubmit}>
+                {loading ? "Verifying..." : "Verify and continue"}
+              </button>
+            </form>
+            <div aria-live="polite">
+              {message ? <p className="auth-success">{message}</p> : null}
+              {error ? <p className="auth-error">{error}</p> : null}
+            </div>
+            <p className="auth-back">
+              Need general help first? <Link href="/chat">Go to chat</Link>
+            </p>
+          </section>
+        </div>
+
+        <SiteFooter
+          links={[
+            { href: "/", label: "Home" },
+            { href: "/chat", label: "Open chat" },
+            { href: "/auth", label: "Verify account" }
+          ]}
+        />
+      </section>
+    </main>
+  );
+}

@@ -1,0 +1,22 @@
+{
+  "name": "customer-support-chatbot-monorepo",
+  "version": "1.0.0",
+  "description": "Meridian Electronics AI Support Agent MVP",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev:frontend",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend run start",
+    "lint": "npm --prefix frontend run lint",
+    "backend:dev": "cd backend && uvicorn app.main:app --reload --port 8000",
+    "backend:test": "bash -lc 'source backend/.venv/bin/activate && pytest backend/tests -q'",
+    "test": "npm run backend:test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "uvicorn": "^0.0.1-security"
+  }
+}

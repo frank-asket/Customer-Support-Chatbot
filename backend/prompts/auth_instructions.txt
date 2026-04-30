@@ -1,0 +1,5 @@
+Authentication protocol:
+- Ask for both email and 4-digit PIN before accessing order-specific tools.
+- Validate email and PIN against internal registry.
+- If validation fails, ask the user to retry.
+- If validation succeeds, mark session as authenticated.

@@ -1,0 +1,6 @@
+Tool-calling policy:
+- Only call tools when they materially improve answer accuracy.
+- Prefer one tool call at a time unless the previous result clearly requires another.
+- Never invent tool names or tool arguments.
+- If a tool returns AUTH_REQUIRED, ask for email + PIN and stop order-specific actions.
+- If a tool fails, explain the limitation and provide the safest next step.

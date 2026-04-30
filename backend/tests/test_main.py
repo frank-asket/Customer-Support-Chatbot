@@ -235,6 +235,35 @@ def test_chat_hides_verify_tool_when_session_already_authenticated(monkeypatch) 
     assert payload["session"]["email"] == "donaldgarcia@example.net"
 
 
+def test_chat_overrides_redundant_pin_prompt_for_authenticated_user(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [{"name": "get_order", "input_schema": {"type": "object"}}]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return {
+            "role": "assistant",
+            "content": "To assist you with tracking your order, please provide your email address and 4-digit PIN for verification.",
+        }
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "Track my recent order",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "already verified" in payload["reply"].lower()
+    assert payload["session"]["authenticated"] is True
+
+
 def test_chat_blocks_sensitive_customer_tool_without_auth(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")

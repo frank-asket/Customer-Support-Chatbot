@@ -334,6 +334,14 @@ def parse_tool_args(raw: str) -> dict[str, Any]:
     return {}
 
 
+def is_redundant_verification_prompt(reply: str) -> bool:
+    lowered = reply.lower()
+    asks_email = "email" in lowered
+    asks_pin = "pin" in lowered or "4-digit" in lowered or "4 digit" in lowered
+    asks_verify = "verify" in lowered or "verification" in lowered
+    return asks_email and asks_pin and asks_verify
+
+
 def parse_cors_origins() -> list[str]:
     value = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
     return [origin.strip() for origin in value.split(",") if origin.strip()]
@@ -781,8 +789,14 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
             tool_calls = assistant_message.get("tool_calls") or []
             if not tool_calls:
+                reply_text = assistant_message.get("content") or "I could not generate a response."
+                if authenticated and is_redundant_verification_prompt(reply_text):
+                    reply_text = (
+                        "You are already verified. I can help with order tracking right away. "
+                        "Please share your order ID or ask me to show your recent orders."
+                    )
                 return ChatResponse(
-                    reply=assistant_message.get("content") or "I could not generate a response.",
+                    reply=reply_text,
                     session=SessionState(authenticated=authenticated, email=authenticated_email),
                     request_id=request_id,
                 )

@@ -1054,7 +1054,8 @@ async def rate_limit_middleware(request: Request, call_next):
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    revocation_backend = "redis" if get_revocation_redis_client() is not None else "memory"
+    return {"status": "ok", "revocation_backend": revocation_backend}
 
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)

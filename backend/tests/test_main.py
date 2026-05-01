@@ -20,7 +20,9 @@ def issue_token(email: str) -> str:
 def test_health_returns_ok() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["revocation_backend"] in {"memory", "redis"}
 
 
 def test_capabilities_returns_live_tool_prompts(monkeypatch) -> None:

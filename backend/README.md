@@ -36,8 +36,18 @@ uvicorn app.main:app --reload --port 8000
 - `AUTH_TOKEN_SECRET`: Secret used to sign auth tokens returned by `/auth/verify` and validated by `/chat` (required in production)
 - `AUTH_TOKEN_AUDIENCE`: String claim (`aud`) embedded in each token; validation fails if the server’s value does not match (default: `meridian-support`)
 - `AUTH_TOKEN_TTL_SECONDS`: Access token lifetime in seconds (default: `3600`). Clients should call `/auth/refresh` before expiry.
-- **Token lifecycle:** Tokens are signed payloads (`sub`, `iat`, `exp`, `aud`, `jti`). `/auth/refresh` issues a new token and revokes the previous `jti` (in-process revocation store; use sticky sessions or a shared store if you run multiple backend replicas).
+- `AUTH_REVOCATION_REDIS_URL`: Optional Redis URL for distributed token revocation denylist (falls back to in-memory when unset/unavailable)
+- `AUTH_REVOCATION_REDIS_PREFIX`: Optional Redis key prefix for revoked `jti` entries (default: `auth:revoked_jti:`)
+- **Token lifecycle:** Tokens are signed payloads (`sub`, `iat`, `exp`, `aud`, `jti`). `/auth/refresh` issues a new token and revokes the previous `jti` in Redis when configured (otherwise in-memory fallback).
 - `MAX_TOOL_ARGUMENTS_CHARS`: Guardrail for tool argument payload size (default: `4000`)
+- `RATE_LIMIT_WINDOW_SECONDS`: Shared rolling window for endpoint limits (default: `60`)
+- `RATE_LIMIT_DEFAULT_REQUESTS`: Default request limit per client IP + path per window (default: `120`)
+- `RATE_LIMIT_HEALTH_REQUESTS`: `/health` request limit (default: `300`)
+- `RATE_LIMIT_CAPABILITIES_REQUESTS`: `/capabilities` request limit (default: `120`)
+- `RATE_LIMIT_AUTH_VERIFY_REQUESTS`: `/auth/verify` request limit (default: `20`)
+- `RATE_LIMIT_AUTH_REFRESH_REQUESTS`: `/auth/refresh` request limit (default: `60`)
+- `RATE_LIMIT_AUTH_LOGOUT_REQUESTS`: `/auth/logout` request limit (default: `60`)
+- `RATE_LIMIT_CHAT_REQUESTS`: `/chat` request limit (default: `30`)
 
 ### Model Routing Behavior
 
@@ -48,11 +58,14 @@ uvicorn app.main:app --reload --port 8000
 ## Endpoints
 
 - `GET /health`
+- `GET /capabilities`
+- `POST /auth/verify`
 - `POST /auth/refresh` — body: `{ "auth_token": "<token>" }`; returns new token and TTL
 - `POST /auth/logout` — body: `{ "auth_token": "<token>" }`; revokes that token (v2 only)
 - `POST /chat`
   - Request supports `message`, `session`, and `stream` (stream currently disabled in tool-calling mode)
   - Response includes `reply`, `session`, and `request_id` for traceability
+  - All endpoints are rate-limited per client IP and endpoint path. Exceeded limits return `429 RATE_LIMITED`.
 
 ### Streaming
 

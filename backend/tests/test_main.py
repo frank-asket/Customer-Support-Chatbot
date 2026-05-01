@@ -634,6 +634,37 @@ def test_auth_refresh_revokes_previous_token(monkeypatch) -> None:
     assert main.validate_auth_token(payload["auth_token"])[0] is True
 
 
+def test_auth_refresh_uses_redis_revocation_store_when_configured(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_TOKEN_SECRET", "redis-secret")
+    monkeypatch.delenv("AUTH_TOKEN_AUDIENCE", raising=False)
+
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.data: dict[str, str] = {}
+
+        def setex(self, key: str, ttl: int, value: str) -> None:
+            assert ttl > 0
+            self.data[key] = value
+
+        def exists(self, key: str) -> int:
+            return 1 if key in self.data else 0
+
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(main, "get_revocation_redis_client", lambda: fake_redis)
+    monkeypatch.setattr(main, "revocation_redis_prefix", lambda: "auth:revoked_jti:")
+
+    first = main.create_auth_token("redis@example.com", ttl_seconds=3600)
+    response = client.post("/auth/refresh", json={"auth_token": first})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authenticated"] is True
+
+    old_jti, _old_exp = main._extract_v2_jti_and_exp(first)
+    assert old_jti is not None
+    assert f"auth:revoked_jti:{old_jti}" in fake_redis.data
+    assert main.validate_auth_token(first)[0] is False
+
+
 def test_auth_logout_revokes_token(monkeypatch) -> None:
     monkeypatch.setenv("AUTH_TOKEN_SECRET", "logout-secret")
     monkeypatch.delenv("AUTH_TOKEN_AUDIENCE", raising=False)
@@ -692,6 +723,22 @@ def test_chat_rejects_too_long_message(monkeypatch) -> None:
     response = client.post("/chat", json={"message": "this is too long"})
     assert response.status_code == 400
     assert "exceeds max length" in response.json()["detail"]
+
+
+def test_health_rate_limit_enforced(monkeypatch) -> None:
+    monkeypatch.setenv("RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("RATE_LIMIT_HEALTH_REQUESTS", "1")
+    with main._RATE_LOCK:
+        main._RATE_BUCKETS.clear()
+
+    first = client.get("/health")
+    second = client.get("/health")
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    body = second.json()
+    assert body["error"] == "RATE_LIMITED"
+    assert "retry_after_seconds" in body
 
 
 def test_disallows_unknown_tool_name(monkeypatch) -> None:

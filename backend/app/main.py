@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections import deque
 import hashlib
 import hmac
 import json
@@ -10,13 +11,19 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+try:
+    import redis
+except Exception:  # pragma: no cover - optional dependency fallback
+    redis = None
 
 
 AUTH_REGISTRY: dict[str, str] = {
@@ -62,6 +69,10 @@ logging.basicConfig(level=logging.INFO)
 
 # Revoked token IDs (jti) until their original exp; in-process only (single-instance / dev).
 _REVOKED_JTIS: dict[str, int] = {}
+_REVOCATION_REDIS_CLIENT: Any | None = None
+_REVOCATION_REDIS_INIT_ATTEMPTED = False
+_RATE_BUCKETS: dict[tuple[str, str], deque[float]] = {}
+_RATE_LOCK = Lock()
 
 
 class SessionState(BaseModel):
@@ -593,6 +604,33 @@ def auth_token_ttl_seconds() -> int:
     return parse_int_env("AUTH_TOKEN_TTL_SECONDS", 3600)
 
 
+def revocation_redis_url() -> str | None:
+    return parse_optional_str_env("AUTH_REVOCATION_REDIS_URL") or parse_optional_str_env("REDIS_URL")
+
+
+def revocation_redis_prefix() -> str:
+    return parse_optional_str_env("AUTH_REVOCATION_REDIS_PREFIX") or "auth:revoked_jti:"
+
+
+def get_revocation_redis_client() -> Any | None:
+    global _REVOCATION_REDIS_CLIENT, _REVOCATION_REDIS_INIT_ATTEMPTED
+    if _REVOCATION_REDIS_CLIENT is not None:
+        return _REVOCATION_REDIS_CLIENT
+    if _REVOCATION_REDIS_INIT_ATTEMPTED:
+        return None
+    _REVOCATION_REDIS_INIT_ATTEMPTED = True
+    redis_url = revocation_redis_url()
+    if not redis_url or redis is None:
+        return None
+    try:
+        _REVOCATION_REDIS_CLIENT = redis.from_url(redis_url, decode_responses=True)
+        return _REVOCATION_REDIS_CLIENT
+    except Exception as error:
+        logger.warning("Redis revocation store unavailable; falling back to in-memory denylist: %s", str(error))
+        _REVOCATION_REDIS_CLIENT = None
+        return None
+
+
 def _prune_revoked_jtis() -> None:
     now = int(time.time())
     stale = [jti for jti, exp in _REVOKED_JTIS.items() if exp < now]
@@ -601,11 +639,28 @@ def _prune_revoked_jtis() -> None:
 
 
 def revoke_auth_token_jti(jti: str, exp: int) -> None:
+    now = int(time.time())
+    ttl = max(exp - now, 1)
+    redis_client = get_revocation_redis_client()
+    if redis_client is not None:
+        key = f"{revocation_redis_prefix()}{jti}"
+        try:
+            redis_client.setex(key, ttl, "1")
+            return
+        except Exception as error:
+            logger.warning("Redis revoke write failed; falling back to in-memory denylist: %s", str(error))
     _prune_revoked_jtis()
     _REVOKED_JTIS[jti] = exp
 
 
 def is_auth_token_jti_revoked(jti: str) -> bool:
+    redis_client = get_revocation_redis_client()
+    if redis_client is not None:
+        key = f"{revocation_redis_prefix()}{jti}"
+        try:
+            return bool(redis_client.exists(key))
+        except Exception as error:
+            logger.warning("Redis revoke lookup failed; falling back to in-memory denylist: %s", str(error))
     _prune_revoked_jtis()
     return jti in _REVOKED_JTIS
 
@@ -695,6 +750,32 @@ def unique_models(*models: str | None) -> list[str]:
             seen.add(model)
             ordered.append(model)
     return ordered
+
+
+def get_rate_limit_window_seconds() -> int:
+    return max(1, parse_int_env("RATE_LIMIT_WINDOW_SECONDS", 60))
+
+
+def get_rate_limit_for_path(path: str) -> int:
+    default_limit = max(1, parse_int_env("RATE_LIMIT_DEFAULT_REQUESTS", 120))
+    endpoint_overrides = {
+        "/health": max(1, parse_int_env("RATE_LIMIT_HEALTH_REQUESTS", 300)),
+        "/capabilities": max(1, parse_int_env("RATE_LIMIT_CAPABILITIES_REQUESTS", 120)),
+        "/auth/verify": max(1, parse_int_env("RATE_LIMIT_AUTH_VERIFY_REQUESTS", 20)),
+        "/auth/refresh": max(1, parse_int_env("RATE_LIMIT_AUTH_REFRESH_REQUESTS", 60)),
+        "/auth/logout": max(1, parse_int_env("RATE_LIMIT_AUTH_LOGOUT_REQUESTS", 60)),
+        "/chat": max(1, parse_int_env("RATE_LIMIT_CHAT_REQUESTS", 30)),
+    }
+    return endpoint_overrides.get(path, default_limit)
+
+
+def get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip() or "unknown"
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
 
 
 def normalize_model_slug(model: str | None) -> str | None:
@@ -930,6 +1011,45 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if request.url.path in {"/openapi.json", "/docs", "/redoc"}:
+        return await call_next(request)
+
+    window_seconds = get_rate_limit_window_seconds()
+    limit = get_rate_limit_for_path(request.url.path)
+    client_ip = get_client_ip(request)
+    key = (client_ip, request.url.path)
+    now = time.time()
+
+    with _RATE_LOCK:
+        bucket = _RATE_BUCKETS.setdefault(key, deque())
+        cutoff = now - window_seconds
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+
+        if len(bucket) >= limit:
+            retry_after = max(1, int(window_seconds - (now - bucket[0])))
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "RATE_LIMITED",
+                    "message": "Too many requests. Please retry later.",
+                    "retry_after_seconds": retry_after,
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        bucket.append(now)
+        remaining = max(0, limit - len(bucket))
+
+    response = await call_next(request)
+    response.headers["X-RateLimit-Limit"] = str(limit)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Window-Seconds"] = str(window_seconds)
+    return response
 
 
 @app.get("/health")

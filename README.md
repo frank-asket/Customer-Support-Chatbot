@@ -112,6 +112,59 @@ To ensure optimal performance and scalability, the application is split into two
 - **Exception handling:** Upstream OpenRouter/MCP timeouts and HTTP failures are mapped to `504`/`502` responses with retries.
 - **Streaming:** Disabled for tool-calling mode in MVP (`stream=true` returns `400`). Full streaming requires SSE/WebSocket event orchestration.
 
+## 🧭 Architecture Diagrams
+
+### High-Level Architecture
+
+```mermaid
+flowchart LR
+    U[User Browser] -->|HTTPS| FE[Frontend - Next.js App Router<br/>Hosted on Vercel<br/><br/>Pages: Landing / Auth / Chat<br/>API Routes: /api/chat, /api/auth/*, /api/capabilities]
+
+    FE -->|BACKEND_API_URL| BE[Backend - FastAPI<br/>Hosted on Railway<br/><br/>Endpoints: /chat, /auth/verify, /auth/refresh,<br/>/auth/logout, /capabilities<br/><br/>Middleware: Rate Limiting<br/>Auth: token validation + revocation]
+
+    BE -->|chat/completions| OR[OpenRouter<br/>LLM Model Routing]
+    BE -->|tools/list + tools/call<br/>Streamable HTTP / JSON-RPC| MCP[Meridian MCP Server]
+
+    BE -. optional .-> R[(Redis<br/>revoked token denylist)]
+
+    SEC[[Security Rule:<br/>Email + PIN required<br/>before order-related tools]]
+    SEC -. enforced in .-> BE
+
+    CICD[GitHub Actions CI/CD<br/>- CI on push/PR<br/>- Railway deploy on main<br/>- Vercel preview on PR]
+    CICD -. deploy pipeline .-> FE
+    CICD -. deploy pipeline .-> BE
+```
+
+### Chat Request Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant User as User (Browser)
+    participant FE as Frontend (Next.js /api/chat)
+    participant BE as Backend (FastAPI /chat)
+    participant OR as OpenRouter
+    participant MCP as Meridian MCP Server
+
+    User->>FE: POST /api/chat (message + session/auth token)
+    FE->>BE: Forward request to /chat
+    BE->>BE: Validate auth token/session
+    BE->>MCP: tools/list (discover available tools)
+    MCP-->>BE: tool definitions
+    BE->>OR: chat/completions (system+auth prompts + tools)
+    OR-->>BE: assistant response (possibly tool_calls)
+
+    alt assistant includes tool_calls
+        BE->>BE: Enforce guardrails (PIN gate, allowlist, arg size)
+        BE->>MCP: tools/call
+        MCP-->>BE: tool result
+        BE->>OR: chat/completions with tool output
+        OR-->>BE: final assistant message
+    end
+
+    BE-->>FE: reply + session + request_id
+    FE-->>User: Render assistant response
+```
+
 ---
 **Lead Engineer:** Franck  
 **Date:** Thursday, April 30th, 2026

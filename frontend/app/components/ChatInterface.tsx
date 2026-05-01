@@ -7,6 +7,8 @@ type Session = {
   authenticated: boolean;
   email: string | null;
   authToken?: string | null;
+  /** Client-side expiry (ms since epoch); used to refresh before TTL. */
+  authTokenExpiresAt?: number | null;
   customerContext?: {
     first_name: string;
     last_order_id: string;
@@ -21,6 +23,53 @@ type ChatEntry = {
 };
 
 const SESSION_KEY = "meridian_support_session";
+
+const REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
+function revokeRemoteSession(token: string | null | undefined) {
+  if (!token) return;
+  void fetch("/api/auth/logout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auth_token: token })
+  });
+}
+
+async function refreshSessionIfStale(sess: Session): Promise<Session> {
+  if (!sess.authenticated || !sess.authToken) return sess;
+  if (sess.authTokenExpiresAt && Date.now() < sess.authTokenExpiresAt - REFRESH_MARGIN_MS) return sess;
+  try {
+    const res = await fetch("/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auth_token: sess.authToken })
+    });
+    const data = (await res.json()) as {
+      authenticated?: boolean;
+      auth_token?: string | null;
+      auth_token_expires_in?: number | null;
+      email?: string | null;
+    };
+    if (!res.ok || !data.authenticated || !data.auth_token) {
+      return {
+        authenticated: false,
+        email: null,
+        authToken: null,
+        authTokenExpiresAt: null,
+        customerContext: null
+      };
+    }
+    const ttlSec = typeof data.auth_token_expires_in === "number" ? data.auth_token_expires_in : 3600;
+    return {
+      ...sess,
+      authToken: data.auth_token,
+      email: data.email ?? sess.email,
+      authTokenExpiresAt: Date.now() + ttlSec * 1000
+    };
+  } catch {
+    return sess;
+  }
+}
 
 function buildWelcomeMessage(session: Session): string {
   const context = session.customerContext;
@@ -39,7 +88,12 @@ function buildWelcomeMessage(session: Session): string {
 export default function ChatInterface() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatEntry[]>([]);
-  const [session, setSession] = useState<Session>({ authenticated: false, email: null, authToken: null });
+  const [session, setSession] = useState<Session>({
+    authenticated: false,
+    email: null,
+    authToken: null,
+    authTokenExpiresAt: null
+  });
   const [sessionReady, setSessionReady] = useState(false);
   const [capabilityPrompts, setCapabilityPrompts] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -58,6 +112,7 @@ export default function ChatInterface() {
           authenticated: parsed.authenticated,
           email: parsed.email ?? null,
           authToken: parsed.authToken ?? null,
+          authTokenExpiresAt: parsed.authTokenExpiresAt ?? null,
           customerContext: parsed.customerContext ?? null
         };
         setSession(nextSession);
@@ -116,13 +171,33 @@ export default function ChatInterface() {
     setLoading(true);
 
     try {
+      let workingSession = session;
+      if (session.authenticated && session.authToken) {
+        workingSession = await refreshSessionIfStale(session);
+        if (
+          workingSession.authToken !== session.authToken ||
+          workingSession.authTokenExpiresAt !== session.authTokenExpiresAt ||
+          workingSession.authenticated !== session.authenticated
+        ) {
+          setSession(workingSession);
+        }
+      }
+      if (workingSession.authenticated && !workingSession.authToken) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: "Your session expired. Please verify again from the auth page." }
+        ]);
+        setLoading(false);
+        return;
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: nextInput,
-          session: { authenticated: session.authenticated, email: session.email },
-          auth_token: session.authToken ?? null
+          session: { authenticated: workingSession.authenticated, email: workingSession.email },
+          auth_token: workingSession.authToken ?? null
         })
       });
 
@@ -151,6 +226,7 @@ export default function ChatInterface() {
           authenticated: data.session?.authenticated ?? prev.authenticated,
           email: data.session?.email ?? prev.email,
           authToken: data.session?.authenticated ? prev.authToken ?? null : null,
+          authTokenExpiresAt: data.session?.authenticated ? prev.authTokenExpiresAt ?? null : null,
           customerContext: data.session?.authenticated ? prev.customerContext ?? null : null
         }));
       }
@@ -174,7 +250,8 @@ export default function ChatInterface() {
             <button
               type="button"
               onClick={() => {
-                setSession({ authenticated: false, email: null, authToken: null });
+                revokeRemoteSession(session.authToken);
+                setSession({ authenticated: false, email: null, authToken: null, authTokenExpiresAt: null });
                 localStorage.removeItem(SESSION_KEY);
                 setMessages([]);
               }}
@@ -204,9 +281,10 @@ export default function ChatInterface() {
           <button
             type="button"
             onClick={() => {
+              revokeRemoteSession(session.authToken);
               setMessages([]);
               setLastRequestId(null);
-              setSession({ authenticated: false, email: null, authToken: null });
+              setSession({ authenticated: false, email: null, authToken: null, authTokenExpiresAt: null });
               localStorage.removeItem(SESSION_KEY);
             }}
             className="chat-chip-btn chat-chip-secondary"

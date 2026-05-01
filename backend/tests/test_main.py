@@ -1,3 +1,9 @@
+import base64
+import hashlib
+import hmac
+import json
+import time
+
 import httpx
 from fastapi.testclient import TestClient
 
@@ -611,6 +617,68 @@ def test_auth_token_secret_required_in_production(monkeypatch) -> None:
             assert "AUTH_TOKEN_SECRET" in str(error)
     finally:
         monkeypatch.delenv("ENV", raising=False)
+
+
+def test_auth_refresh_revokes_previous_token(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_TOKEN_SECRET", "rotate-secret")
+    monkeypatch.delenv("AUTH_TOKEN_AUDIENCE", raising=False)
+    first = main.create_auth_token("u@example.com", ttl_seconds=3600)
+    assert main.validate_auth_token(first)[0] is True
+    response = client.post("/auth/refresh", json={"auth_token": first})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authenticated"] is True
+    assert payload["auth_token"]
+    assert payload["auth_token"] != first
+    assert main.validate_auth_token(first)[0] is False
+    assert main.validate_auth_token(payload["auth_token"])[0] is True
+
+
+def test_auth_logout_revokes_token(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_TOKEN_SECRET", "logout-secret")
+    monkeypatch.delenv("AUTH_TOKEN_AUDIENCE", raising=False)
+    token = main.create_auth_token("u@example.com", ttl_seconds=3600)
+    assert main.validate_auth_token(token)[0] is True
+    response = client.post("/auth/logout", json={"auth_token": token})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert main.validate_auth_token(token)[0] is False
+
+
+def test_auth_token_wrong_audience_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_TOKEN_SECRET", "aud-secret")
+    monkeypatch.delenv("AUTH_TOKEN_AUDIENCE", raising=False)
+    token = main.create_auth_token("x@y.com", ttl_seconds=600)
+    assert main.validate_auth_token(token)[0] is True
+    monkeypatch.setenv("AUTH_TOKEN_AUDIENCE", "other-audience")
+    assert main.validate_auth_token(token)[0] is False
+
+
+def test_legacy_hmac_auth_token_still_accepted(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_TOKEN_SECRET", "legacy-sec")
+    email = "legacy@example.com"
+    exp = int(time.time()) + 600
+    payload = f"{email}|{exp}"
+    signature = hmac.new(b"legacy-sec", payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    raw = f"{email}|{exp}|{signature}"
+    token = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8")
+    ok, parsed = main.validate_auth_token(token)
+    assert ok is True
+    assert parsed == email
+
+
+def test_v2_token_contains_jti_iat_aud(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_TOKEN_SECRET", "v2-secret")
+    monkeypatch.delenv("AUTH_TOKEN_AUDIENCE", raising=False)
+    token = main.create_auth_token("v2@example.com", ttl_seconds=120)
+    decoded = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+    body, sig = decoded.rsplit("|", 1)
+    claims = json.loads(body)
+    assert claims["sub"] == "v2@example.com"
+    assert claims["aud"] == "meridian-support"
+    assert "jti" in claims and claims["jti"]
+    assert "iat" in claims and "exp" in claims
+    assert isinstance(sig, str) and len(sig) == 64
 
 
 def test_chat_rejects_stream_mode() -> None:

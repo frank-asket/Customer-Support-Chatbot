@@ -43,6 +43,7 @@ export default function AuthPage() {
         message?: string;
         customer_context?: CustomerContext | null;
         auth_token?: string | null;
+        auth_token_expires_in?: number | null;
         error?: string;
         details?: string;
       };
@@ -53,13 +54,15 @@ export default function AuthPage() {
       }
 
       if (data.authenticated) {
+        const ttlSec = typeof data.auth_token_expires_in === "number" ? data.auth_token_expires_in : 3600;
         localStorage.setItem(
           SESSION_KEY,
           JSON.stringify({
             authenticated: true,
             email: data.email ?? email.trim().toLowerCase(),
             customerContext: data.customer_context ?? null,
-            authToken: data.auth_token ?? null
+            authToken: data.auth_token ?? null,
+            authTokenExpiresAt: Date.now() + ttlSec * 1000
           })
         );
         setMessage(data.message ?? "Verification successful.");

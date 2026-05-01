@@ -60,6 +60,9 @@ TOOL_POLICY_PATH = BACKEND_DIR / "prompts" / "tool_policy.txt"
 logger = logging.getLogger("meridian-backend")
 logging.basicConfig(level=logging.INFO)
 
+# Revoked token IDs (jti) until their original exp; in-process only (single-instance / dev).
+_REVOKED_JTIS: dict[str, int] = {}
+
 
 class SessionState(BaseModel):
     authenticated: bool = False
@@ -89,6 +92,18 @@ class AuthVerifyResponse(BaseModel):
     email: str | None
     message: str
     customer_context: dict[str, str] | None = None
+    auth_token: str | None = None
+    auth_token_expires_in: int | None = None
+
+
+class AuthTokenBody(BaseModel):
+    auth_token: str
+
+
+class AuthRefreshResponse(BaseModel):
+    authenticated: bool
+    email: str | None
+    message: str
     auth_token: str | None = None
     auth_token_expires_in: int | None = None
 
@@ -570,12 +585,94 @@ def auth_token_secret() -> str:
     return "local-dev-auth-secret-change-me"
 
 
-def create_auth_token(email: str, *, ttl_seconds: int = 3600) -> str:
-    exp = int(time.time()) + ttl_seconds
-    payload = f"{email}|{exp}"
-    signature = hmac.new(auth_token_secret().encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    token_raw = f"{email}|{exp}|{signature}"
+def auth_token_audience() -> str:
+    return (os.getenv("AUTH_TOKEN_AUDIENCE") or "meridian-support").strip() or "meridian-support"
+
+
+def auth_token_ttl_seconds() -> int:
+    return parse_int_env("AUTH_TOKEN_TTL_SECONDS", 3600)
+
+
+def _prune_revoked_jtis() -> None:
+    now = int(time.time())
+    stale = [jti for jti, exp in _REVOKED_JTIS.items() if exp < now]
+    for jti in stale:
+        _REVOKED_JTIS.pop(jti, None)
+
+
+def revoke_auth_token_jti(jti: str, exp: int) -> None:
+    _prune_revoked_jtis()
+    _REVOKED_JTIS[jti] = exp
+
+
+def is_auth_token_jti_revoked(jti: str) -> bool:
+    _prune_revoked_jtis()
+    return jti in _REVOKED_JTIS
+
+
+def create_auth_token(email: str, *, ttl_seconds: int | None = None) -> str:
+    if ttl_seconds is None:
+        ttl_seconds = auth_token_ttl_seconds()
+    now = int(time.time())
+    exp = now + int(ttl_seconds)
+    audience = auth_token_audience()
+    claims = {
+        "sub": email.strip().lower(),
+        "iat": now,
+        "exp": exp,
+        "aud": audience,
+        "jti": str(uuid.uuid4()),
+    }
+    body = json.dumps(claims, sort_keys=True, separators=(",", ":"))
+    signature = hmac.new(auth_token_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    token_raw = f"{body}|{signature}"
     return base64.urlsafe_b64encode(token_raw.encode("utf-8")).decode("utf-8")
+
+
+def _validate_legacy_auth_token(decoded: str) -> tuple[bool, str | None]:
+    try:
+        email, exp_raw, signature = decoded.split("|", 2)
+        exp = int(exp_raw)
+    except Exception:
+        return False, None
+    now = int(time.time())
+    if exp < now:
+        return False, None
+    payload = f"{email}|{exp}"
+    expected = hmac.new(auth_token_secret().encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return False, None
+    return True, email.strip().lower()
+
+
+def _validate_v2_auth_token(decoded: str) -> tuple[bool, str | None]:
+    try:
+        body, signature = decoded.rsplit("|", 1)
+        if not body.startswith("{"):
+            return False, None
+        expected = hmac.new(auth_token_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return False, None
+        data = json.loads(body)
+        email = data.get("sub")
+        exp = int(data.get("exp", 0))
+        iat = int(data.get("iat", 0))
+        aud = data.get("aud")
+        jti = data.get("jti")
+        now = int(time.time())
+        if not isinstance(email, str) or not email.strip():
+            return False, None
+        if exp < now or iat > now:
+            return False, None
+        if aud != auth_token_audience():
+            return False, None
+        if not isinstance(jti, str) or not jti.strip():
+            return False, None
+        if is_auth_token_jti_revoked(jti):
+            return False, None
+        return True, email.strip().lower()
+    except Exception:
+        return False, None
 
 
 def validate_auth_token(token: str | None) -> tuple[bool, str | None]:
@@ -583,19 +680,11 @@ def validate_auth_token(token: str | None) -> tuple[bool, str | None]:
         return False, None
     try:
         decoded = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
-        email, exp_raw, signature = decoded.split("|", 2)
-        exp = int(exp_raw)
     except Exception:
         return False, None
-
-    if exp < int(time.time()):
-        return False, None
-
-    payload = f"{email}|{exp}"
-    expected = hmac.new(auth_token_secret().encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(signature, expected):
-        return False, None
-    return True, email
+    if "|" in decoded and decoded.strip().startswith("{"):
+        return _validate_v2_auth_token(decoded)
+    return _validate_legacy_auth_token(decoded)
 
 
 def unique_models(*models: str | None) -> list[str]:
@@ -872,7 +961,7 @@ async def verify_auth(payload: AuthVerifyRequest) -> AuthVerifyResponse:
     pin = payload.pin.strip()
     authenticated = AUTH_REGISTRY.get(email) == pin
     if authenticated:
-        token_ttl_seconds = 3600
+        token_ttl_seconds = auth_token_ttl_seconds()
         token = create_auth_token(email, ttl_seconds=token_ttl_seconds)
         customer_context = None
         mcp_server_url = os.getenv("MCP_SERVER_URL")
@@ -899,6 +988,57 @@ async def verify_auth(payload: AuthVerifyRequest) -> AuthVerifyResponse:
         auth_token=None,
         auth_token_expires_in=None,
     )
+
+
+def _extract_v2_jti_and_exp(token: str) -> tuple[str | None, int]:
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        if not decoded.strip().startswith("{"):
+            return None, 0
+        body, _sig = decoded.rsplit("|", 1)
+        data = json.loads(body)
+        jti = data.get("jti")
+        exp = int(data.get("exp", 0))
+        if isinstance(jti, str) and jti.strip():
+            return jti.strip(), exp
+    except Exception:
+        pass
+    return None, 0
+
+
+@app.post("/auth/refresh", response_model=AuthRefreshResponse)
+async def refresh_auth(payload: AuthTokenBody) -> AuthRefreshResponse:
+    ok, email = validate_auth_token(payload.auth_token)
+    if not ok or not email:
+        return AuthRefreshResponse(
+            authenticated=False,
+            email=None,
+            message="Invalid or expired session. Please verify again.",
+            auth_token=None,
+            auth_token_expires_in=None,
+        )
+    ttl = auth_token_ttl_seconds()
+    new_token = create_auth_token(email, ttl_seconds=ttl)
+    old_jti, old_exp = _extract_v2_jti_and_exp(payload.auth_token)
+    if old_jti:
+        revoke_auth_token_jti(old_jti, old_exp)
+    return AuthRefreshResponse(
+        authenticated=True,
+        email=email,
+        message="Session refreshed.",
+        auth_token=new_token,
+        auth_token_expires_in=ttl,
+    )
+
+
+@app.post("/auth/logout")
+async def logout_auth(payload: AuthTokenBody) -> dict[str, bool]:
+    ok, _email = validate_auth_token(payload.auth_token)
+    if ok:
+        old_jti, old_exp = _extract_v2_jti_and_exp(payload.auth_token)
+        if old_jti:
+            revoke_auth_token_jti(old_jti, old_exp)
+    return {"ok": True}
 
 
 @app.post("/chat", response_model=ChatResponse)

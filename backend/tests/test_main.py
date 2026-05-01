@@ -540,6 +540,79 @@ def test_chat_requires_explicit_confirmation_before_create_order(monkeypatch) ->
     assert response.json()["reply"] == "Please confirm order creation first."
 
 
+def test_chat_blocks_required_args_when_empty_or_wrong_type(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://mcp.example.com")
+
+    async def fake_list_tools(self):
+        return [
+            {
+                "name": "create_order",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string"},
+                        "items": {"type": "array"},
+                    },
+                    "required": ["customer_id", "items"],
+                },
+            }
+        ]
+
+    responses = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-create-bad",
+                    "type": "function",
+                    "function": {
+                        "name": "create_order",
+                        "arguments": '{"customer_id":"   ","items":"not-an-array"}',
+                    },
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please provide valid order details."},
+    ]
+
+    async def fake_chat(self, messages, tools, *, model=None):
+        return responses.pop(0)
+
+    async def fail_if_called(self, name, arguments):
+        raise AssertionError("create_order should not run with invalid required args")
+
+    monkeypatch.setattr(main.MCPService, "list_tools", fake_list_tools)
+    monkeypatch.setattr(main.MCPService, "call_tool", fail_if_called)
+    monkeypatch.setattr(main.OpenRouterService, "chat", fake_chat)
+
+    auth_token = issue_token("donaldgarcia@example.net")
+    response = client.post(
+        "/chat",
+        json={
+            "message": "yes confirm create order now",
+            "session": {"authenticated": True, "email": "donaldgarcia@example.net"},
+            "auth_token": auth_token,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["reply"] == "Please provide valid order details."
+
+
+def test_auth_token_secret_required_in_production(monkeypatch) -> None:
+    monkeypatch.delenv("AUTH_TOKEN_SECRET", raising=False)
+    monkeypatch.setenv("ENV", "production")
+    try:
+        try:
+            main.create_auth_token("donaldgarcia@example.net", ttl_seconds=60)
+            raise AssertionError("Expected runtime error for missing production auth token secret")
+        except RuntimeError as error:
+            assert "AUTH_TOKEN_SECRET" in str(error)
+    finally:
+        monkeypatch.delenv("ENV", raising=False)
+
+
 def test_chat_rejects_stream_mode() -> None:
     response = client.post("/chat", json={"message": "hello", "stream": True})
     assert response.status_code == 400

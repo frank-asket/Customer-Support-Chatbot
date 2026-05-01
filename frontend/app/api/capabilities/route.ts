@@ -20,7 +20,16 @@ export async function GET() {
       headers: { "Content-Type": "application/json" },
       cache: "no-store"
     });
-    const data = await response.json();
+    const raw = await response.text();
+    let data: Record<string, unknown>;
+    try {
+      data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    } catch {
+      data = {
+        error: response.ok ? "Unexpected non-JSON response" : "Backend capabilities request failed",
+        details: raw.slice(0, 500) || response.statusText || "No response body"
+      };
+    }
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
     return NextResponse.json(

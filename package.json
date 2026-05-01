@@ -15,8 +15,5 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "uvicorn": "^0.0.1-security"
-  }
+  "license": "ISC"
 }

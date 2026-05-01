@@ -424,6 +424,71 @@ def required_tool_args(tool_schema: dict[str, Any] | None) -> list[str]:
     return []
 
 
+def tool_arg_schema_for_field(tool_schema: dict[str, Any] | None, field: str) -> dict[str, Any] | None:
+    if not isinstance(tool_schema, dict):
+        return None
+    properties = tool_schema.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    schema = properties.get(field)
+    return schema if isinstance(schema, dict) else None
+
+
+def expected_types_for_field(field_schema: dict[str, Any] | None) -> set[str]:
+    if not isinstance(field_schema, dict):
+        return set()
+    expected: set[str] = set()
+    schema_type = field_schema.get("type")
+    if isinstance(schema_type, str):
+        expected.add(schema_type)
+    any_of = field_schema.get("anyOf")
+    if isinstance(any_of, list):
+        for variant in any_of:
+            if isinstance(variant, dict):
+                variant_type = variant.get("type")
+                if isinstance(variant_type, str):
+                    expected.add(variant_type)
+    return expected
+
+
+def type_matches_schema(value: Any, expected_types: set[str]) -> bool:
+    if not expected_types:
+        return True
+    type_map = {
+        "string": lambda v: isinstance(v, str),
+        "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "boolean": lambda v: isinstance(v, bool),
+        "array": lambda v: isinstance(v, list),
+        "object": lambda v: isinstance(v, dict),
+        "null": lambda v: v is None,
+    }
+    return any(checker(value) for key, checker in type_map.items() if key in expected_types)
+
+
+def invalid_required_args(tool_args: dict[str, Any], tool_schema: dict[str, Any] | None) -> list[str]:
+    invalid: list[str] = []
+    for field in required_tool_args(tool_schema):
+        if field not in tool_args:
+            invalid.append(field)
+            continue
+        value = tool_args.get(field)
+        if value is None:
+            invalid.append(field)
+            continue
+        if isinstance(value, str) and not value.strip():
+            invalid.append(field)
+            continue
+        if isinstance(value, list) and len(value) == 0:
+            invalid.append(field)
+            continue
+        field_schema = tool_arg_schema_for_field(tool_schema, field)
+        expected = expected_types_for_field(field_schema)
+        if not type_matches_schema(value, expected):
+            invalid.append(field)
+    return invalid
+
+
 def needs_order_confirmation(user_message: str) -> bool:
     lowered = user_message.lower()
     return not any(keyword in lowered for keyword in ORDER_MUTATION_CONFIRM_KEYWORDS)
@@ -496,7 +561,13 @@ def parse_optional_str_env(name: str) -> str | None:
 
 
 def auth_token_secret() -> str:
-    return os.getenv("AUTH_TOKEN_SECRET", "local-dev-auth-secret-change-me")
+    configured = os.getenv("AUTH_TOKEN_SECRET")
+    environment = os.getenv("ENV", os.getenv("ENVIRONMENT", "development")).strip().lower()
+    if configured and configured.strip():
+        return configured.strip()
+    if environment in {"prod", "production"}:
+        raise RuntimeError("AUTH_TOKEN_SECRET is required in production")
+    return "local-dev-auth-secret-change-me"
 
 
 def create_auth_token(email: str, *, ttl_seconds: int = 3600) -> str:
@@ -1043,8 +1114,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
                 tool_spec = tool_specs_by_name.get(tool_name)
                 schema = (tool_spec or {}).get("input_schema") or (tool_spec or {}).get("inputSchema")
-                missing_required = [field for field in required_tool_args(schema) if field not in tool_args]
-                if missing_required:
+                invalid_required = invalid_required_args(tool_args, schema)
+                if invalid_required:
                     messages.append(
                         {
                             "role": "tool",
@@ -1052,8 +1123,8 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                             "name": tool_name,
                             "content": json.dumps(
                                 {
-                                    "error": "MISSING_REQUIRED_ARGS",
-                                    "message": f"Missing required argument(s): {', '.join(missing_required)}",
+                                    "error": "INVALID_REQUIRED_ARGS",
+                                    "message": f"Required argument(s) missing/invalid: {', '.join(invalid_required)}",
                                 }
                             ),
                         }

@@ -18,14 +18,18 @@ jobs:
     name: Trigger Railway Deploy Hook
     runs-on: ubuntu-latest
     steps:
-      - name: Validate Railway hook secret
+      - name: Check Railway hook secret
+        id: check_secret
         run: |
           if [ -z "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}" ]; then
-            echo "Missing required secret: RAILWAY_DEPLOY_HOOK_URL"
-            exit 1
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping Railway deploy: missing secret RAILWAY_DEPLOY_HOOK_URL"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Trigger Railway deploy
+        if: steps.check_secret.outputs.skip != 'true'
         run: |
           curl --fail --show-error --silent \
             -X POST \
